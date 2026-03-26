@@ -42,9 +42,17 @@ Standard Processing Guidelines:
 5. Quantity Filter: Filter OUT (delete) any rows where Stock/Quantity <= 4.
 6. Price Filter: Filter OUT (delete) any rows where Price < 2.50.
 7- make EAN to 13 digits add 0 prefix to make that if its not defualt 13 digits
-8. if there is a list that writes min qnt for an order; must be writen in aother last column  column
+8. if there is a list that writes min qnt for an order; must be writen in aother last column  column and add 
 9 . ampq has (incoming 23.03)- this must not be in the list !
 10 on some lists there is estimated incoming stock date- must not be in the list.Only ready stockes
+meet also the below conditions
+ stock must be available.-if delivery date is diff must not be on the list
+ if there is a +sign near the qnt- must be removed
+must change all the numbers to be "numbers" in Excel 
+EAN must  be 13 digits
+we have a Hifi list that has to be uploaded every day
+if it says on the supplier list that must take min qnt of an amount it has to be mentioned in another column
+price must be shown with a dot. and then 2 digets  like this 74.50
 User specific request:
 {instruction}
 
@@ -54,8 +62,8 @@ Generate the full `def process_data(rows: list[list[Any]]) -> list[list[Any]]:` 
 DEFAULT_MODEL_NAME = "gemini-3.1-pro"
 
 # Cookie values for authentication
-Secure_1PSID = "g.a0005wgv-g3nRet3H8KDMjbBdMoLt5OMGkUOuR6zL7WtHfrrXA6YjvdBbXTiuE2Qr-C26QLKCQACgYKAT4SARISFQHGX2MizrTJzmaXbs8tMH1w6mHKXBoVAUF8yKrqDVELh01BdXPYaIZQZskQ0076"
-Secure_1PSIDTS = "sidts-CjEB7I_69PF8fsvWv9zdrhRWMtKMvayDeB2GfaZa1crIlizLbTG0QzNv0KKmhrewE9poEAA"
+Secure_1PSID = "g.a0008AiRusOvdEvpaj0tdBOUkfY9cxrDFhM6eczLlgXtUnCBApo21qGp-b3t6WmW8bhhzmD9IAACgYKAfMSARESFQHGX2Miz2KGtM1HfMG-s9iK3y_GshoVAUF8yKpkW22v-Aq8rKwVSa_QBEQQ0076"
+Secure_1PSIDTS = "sidts-CjIBWhotCaQV4efYJL7zxttKlmBG6xYoTWQalkLll8TTwCpJ4ToCz4bpDGHR0DevqmDMixAA"
 
 if set_log_level is not None:
     set_log_level("INFO")
