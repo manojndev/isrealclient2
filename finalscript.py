@@ -35,24 +35,23 @@ USER_PROMPT_TEMPLATE = """Sample raw rows (first {sample_count} rows of the file
 {sample_rows}
 
 Standard Processing Guidelines:
-1. Identify and Format Columns: Ensure the final output has EXACTLY these columns in this exact order: "EAN", "Name", "Price", "Stock/Quantity", "Total Price" (which is Price * Stock/Quantity), and "Supplier" (which must be exactly "{supplier_name}" for every valid data row).
-2. Missing or Bad Headers: Handle data where the first row is not a clear header. Look at the data types (e.g., 13-digit numbers are EAN, strings are Name, floats are Price, integers are Stock/Quantity) if a real header is missing.
-3. Fix EAN Formatting: Ensure EAN column entries are EXACTLY 13-character strings (pad with leading zeros if necessary).
-4. Product Names: Use the Name column. If a brand/manufacturer is provided in a separate column or missing, merge it into the product Name.
-5. Quantity Filter: Filter OUT (delete) any rows where Stock/Quantity <= 4.
-6. Price Filter: Filter OUT (delete) any rows where Price < 2.50.
-7- make EAN to 13 digits add 0 prefix to make that if its not defualt 13 digits
-8. if there is a list that writes min qnt for an order; must be writen in aother last column  column and add 
-9 . ampq has (incoming 23.03)- this must not be in the list !
-10 on some lists there is estimated incoming stock date- must not be in the list.Only ready stockes
-meet also the below conditions
- stock must be available.-if delivery date is diff must not be on the list
- if there is a +sign near the qnt- must be removed
-must change all the numbers to be "numbers" in Excel 
-EAN must  be 13 digits
-we have a Hifi list that has to be uploaded every day
-if it says on the supplier list that must take min qnt of an amount it has to be mentioned in another column
-price must be shown with a dot. and then 2 digets  like this 74.50
+1. Column Identification: Systematically identify "EAN", "Name", "Price", and "Stock/Quantity" columns despite varying headers. If headers are missing, infer based on data patterns (e.g., 13 digits = EAN, text = Name, currency/decimals = Price, integers = Quantity).
+2. Data Cleaning & Extraction:
+   - EAN: Must be strictly a 13-digit string. Left-pad with zeros if shorter. Strip non-numeric characters.
+   - Name: Combine brand/manufacturer with the main description if they are in separate columns.
+   - Price: Remove currency symbols (e.g., '€', '$'), text, and whitespace. Convert to float. Ensure '.' is used for decimals (e.g., 74.50).
+   - Quantity: Remove signs like '+' or text. Convert to integer.
+3. Filtering Rules (Exclude rows if any condition is met):
+   - Quantity is <= 4 or invalid.
+   - Price is < 2.50 or invalid.
+   - Row represents incoming stock, delivery dates, or estimated dates (e.g., "incoming 23.03"). Only keep ready/available stock.
+4. Calculations: Calculate "Total Price" = (Price * Quantity).
+5. Minimum Order Quantity (MOQ): If a minimum order quantity is specified in the list, extract it to a separate column.
+6. Final Output Structure: The final valid rows must follow EXACTLY this column order:
+   ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"] (plus "Min Qty" as the last column if MOQ info exists).
+   - "Supplier" column must be strictly the string "{supplier_name}" for every row.
+   - Output integers and floats as actual numeric types in Python so they display as numbers in Excel, except EAN which remains a string.
+
 User specific request:
 {instruction}
 
