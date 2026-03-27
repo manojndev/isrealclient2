@@ -44,7 +44,8 @@ Standard Processing Guidelines:
 3. Filtering Rules (Exclude rows if any condition is met):
    - Quantity is <= 4 or invalid.
    - Price is < 2.50 or invalid.
-   - Row represents incoming stock, delivery dates, or estimated dates (e.g., "incoming 23.03"). Only keep ready/available stock.
+   - Strict- Row represents incoming stock, delivery dates, or estimated dates , Availability (e.g., "incoming 23.03"). Only keep ready/available stock it can be at any column with any header smartly it has to find and not add if not in stock only in stock has to be added.
+{supplier_specific_rules}
 4. Calculations: Calculate "Total Price" = (Price * Quantity).
 5. Minimum Order Quantity (MOQ): If a minimum order quantity is specified in the list, extract it to a separate column.
 6. Final Output Structure: The final valid rows must follow EXACTLY this column order:
@@ -194,11 +195,16 @@ def format_prompt(sample_rows: list[list[Any]], instruction: str, supplier_name:
     for idx, row in enumerate(sample_rows):
         sample_str += f"Row {idx}: {row}\n"
         
+    supplier_rules = ""
+    if supplier_name.lower() == "akatronik":
+        supplier_rules = "   - STRICT AKATRONIK FILTER: You MUST ONLY KEEP items where the Name contains one of these exact brands (ignoring case): AEG, BEKO, BOSCH, De'Longhi, ELECTROLUX, Gorenje, Hisense, LG, SAMSUNG, Siemens. Otherwise, filter out the entire row."
+        
     return USER_PROMPT_TEMPLATE.format(
         sample_count=len(sample_rows),
         sample_rows=sample_str,
         instruction=instruction,
-        supplier_name=supplier_name
+        supplier_name=supplier_name,
+        supplier_specific_rules=supplier_rules
     )
 
 
