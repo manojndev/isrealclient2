@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -44,14 +45,58 @@ def pick_column(df: pd.DataFrame, candidates: list[str]) -> str:
 	raise KeyError(f"None of these columns were found: {candidates}")
 
 
+def split_code(code: object) -> tuple[str, int, int] | None:
+	"""Split a product code like P41226 into prefix, numeric part, and numeric width."""
+	if pd.isna(code):
+		return None
+
+	text = str(code).strip()
+	if not text:
+		return None
+
+	match = re.match(r"^([A-Za-z]+)(\d+)$", text)
+	if not match:
+		return None
+
+	prefix = match.group(1)
+	number_text = match.group(2)
+	return prefix, int(number_text), len(number_text)
+
+
+def get_last_product_code(db_df: pd.DataFrame, code_col: str) -> tuple[str, int, int]:
+	"""Find the last valid product code in database order."""
+	for value in reversed(db_df[code_col].tolist()):
+		parts = split_code(value)
+		if parts is not None:
+			return parts
+
+	return "P", 0, 1
+
+
+def derive_brand(text: object) -> str:
+	"""Extract a simple brand from the first token of a product title."""
+	if pd.isna(text):
+		return ""
+
+	raw = str(text).strip()
+	if not raw:
+		return ""
+
+	first = raw.split()[0]
+	clean = "".join(ch for ch in first if ch.isalnum())
+	return clean or first
+
+
 def apply_text_format_to_barcode(path: Path) -> None:
 	wb = load_workbook(path)
 	for sheet_name in ["finaloutput", "new products"]:
 		if sheet_name not in wb.sheetnames:
 			continue
 		ws = wb[sheet_name]
-		for row in ws.iter_rows(min_row=2, min_col=1, max_col=1):
+		for row in ws.iter_rows(min_row=2, min_col=1, max_col=2):
 			row[0].number_format = "@"
+			if len(row) > 1:
+				row[1].number_format = "@"
 	wb.save(path)
 
 
@@ -78,12 +123,24 @@ def main() -> None:
 	].drop_duplicates(subset=["_ean13"], keep="first")
 
 	merged = output_df.merge(db_lookup, on="_ean13", how="left", indicator=True)
+	last_prefix, last_number, width = get_last_product_code(db_df, db_hifi_col)
+
+	unmatched_mask = merged["_merge"] == "left_only"
+	unmatched_count = int(unmatched_mask.sum())
+	new_codes = [
+		f"{last_prefix}{str(last_number + i + 1).zfill(width)}"
+		for i in range(unmatched_count)
+	]
+	if unmatched_count:
+		merged.loc[unmatched_mask, db_hifi_col] = new_codes
+
+	output_brand = output_df[output_name_col].apply(derive_brand)
 
 	merged["barcode"] = merged["_ean13"]
 	merged["Hifi code"] = merged[db_hifi_col].fillna("")
 	merged["Name"] = merged[db_brand_col].where(
 		merged[db_brand_col].notna() & (merged[db_brand_col].astype(str).str.strip() != ""),
-		merged[output_name_col],
+		output_brand,
 	)
 	merged["ProductTitle"] = merged[db_title_col].where(
 		merged[db_title_col].notna() & (merged[db_title_col].astype(str).str.strip() != ""),
@@ -109,15 +166,7 @@ def main() -> None:
 	].copy()
 
 	unmatched = merged[merged["_merge"] == "left_only"].copy()
-	new_products_df = unmatched[
-		["barcode", output_name_col, output_price_col, output_qty_col, "Total Price", "Supplier"]
-	].rename(
-		columns={
-			output_name_col: "Name",
-			output_price_col: "Price",
-			output_qty_col: "Stock/Quantity",
-		}
-	)
+	new_products_df = unmatched[["barcode", "Hifi code", "Name", "ProductTitle"]].copy()
 
 	with pd.ExcelWriter(FINAL_OUTPUT_FILE, engine="openpyxl") as writer:
 		final_df.to_excel(writer, sheet_name="finaloutput", index=False)
