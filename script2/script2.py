@@ -134,7 +134,9 @@ def main() -> None:
 	if unmatched_count:
 		merged.loc[unmatched_mask, db_hifi_col] = new_codes
 
-	output_brand = output_df[output_name_col].apply(derive_brand)
+	# Preserve the original output title column before assigning final Name.
+	output_title = merged[output_name_col].copy()
+	output_brand = output_title.apply(derive_brand)
 
 	merged["barcode"] = merged["_ean13"]
 	merged["Hifi code"] = merged[db_hifi_col].fillna("")
@@ -144,7 +146,7 @@ def main() -> None:
 	)
 	merged["ProductTitle"] = merged[db_title_col].where(
 		merged[db_title_col].notna() & (merged[db_title_col].astype(str).str.strip() != ""),
-		merged[output_name_col],
+		output_title,
 	)
 	merged["selling Price"] = merged[output_price_col]
 	merged["sum Available"] = merged[output_qty_col]
@@ -167,6 +169,7 @@ def main() -> None:
 
 	unmatched = merged[merged["_merge"] == "left_only"].copy()
 	new_products_df = unmatched[["barcode", "Hifi code", "Name", "ProductTitle"]].copy()
+	new_products_df = new_products_df.rename(columns={"ProductTitle": "Product title"})
 
 	with pd.ExcelWriter(FINAL_OUTPUT_FILE, engine="openpyxl") as writer:
 		final_df.to_excel(writer, sheet_name="finaloutput", index=False)
