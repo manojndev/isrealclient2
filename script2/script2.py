@@ -87,6 +87,50 @@ def derive_brand(text: object) -> str:
 	return clean or first
 
 
+def calculate_hifi_price(selling_price: object) -> object:
+	"""Apply the requested tiered markup formula based on selling price."""
+	if pd.isna(selling_price):
+		return ""
+
+	try:
+		price = float(selling_price)
+	except (TypeError, ValueError):
+		return ""
+
+	if price <= 4:
+		multiplier = 1.70
+	elif price <= 6:
+		multiplier = 1.65
+	elif price <= 10:
+		multiplier = 1.50
+	elif price <= 15:
+		multiplier = 1.40
+	elif price <= 20:
+		multiplier = 1.30
+	elif price <= 30:
+		multiplier = 1.25
+	elif price <= 50:
+		multiplier = 1.19
+	elif price <= 90:
+		multiplier = 1.15
+	elif price <= 150:
+		multiplier = 1.14
+	elif price <= 190:
+		multiplier = 1.12
+	elif price <= 270:
+		multiplier = 1.11
+	elif price <= 500:
+		multiplier = 1.10
+	elif price <= 800:
+		multiplier = 1.105
+	elif price <= 5000:
+		multiplier = 1.10
+	else:
+		return ""
+
+	return round(price * multiplier, 2)
+
+
 def apply_text_format_to_barcode(path: Path) -> None:
 	wb = load_workbook(path)
 	for sheet_name in ["finaloutput", "new products"]:
@@ -113,13 +157,12 @@ def main() -> None:
 	db_hifi_col = pick_column(db_df, ["Hifi code", "Product code", "Unnamed: 1"])
 	db_brand_col = pick_column(db_df, ["BrandName", "Brand", "Name"])
 	db_title_col = pick_column(db_df, ["roductTitle", "ProductTitle", "Title"])
-	db_hifi_price_col = pick_column(db_df, ["Selling price", "Selling price "])
 
 	output_df["_ean13"] = output_df[output_ean_col].apply(normalize_gtin)
 	db_df["_ean13"] = db_df[db_gtin_col].apply(normalize_gtin)
 
 	db_lookup = db_df[
-		["_ean13", db_hifi_col, db_brand_col, db_title_col, db_hifi_price_col]
+		["_ean13", db_hifi_col, db_brand_col, db_title_col]
 	].drop_duplicates(subset=["_ean13"], keep="first")
 
 	merged = output_df.merge(db_lookup, on="_ean13", how="left", indicator=True)
@@ -150,10 +193,7 @@ def main() -> None:
 	)
 	merged["selling Price"] = merged[output_price_col]
 	merged["sum Available"] = merged[output_qty_col]
-	merged["Hifi price"] = merged[db_hifi_price_col].where(
-		merged[db_hifi_price_col].notna(),
-		merged[output_price_col],
-	)
+	merged["Hifi price"] = merged["selling Price"].apply(calculate_hifi_price)
 
 	final_df = merged[
 		[
