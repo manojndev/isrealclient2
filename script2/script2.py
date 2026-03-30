@@ -152,6 +152,7 @@ def main() -> None:
 	output_name_col = pick_column(output_df, ["Name", "ProductTitle", "title"])
 	output_price_col = pick_column(output_df, ["Price", "selling Price", "Selling price"])
 	output_qty_col = pick_column(output_df, ["Stock/Quantity", "sum Available", "qty"])
+	output_vendor_col = pick_column(output_df, ["Supplier", "Vendor", "Vendor name"])
 
 	db_gtin_col = pick_column(db_df, ["Gtin", "GTIN", "EAN", "barcode"])
 	db_hifi_col = pick_column(db_df, ["Hifi code", "Product code", "Unnamed: 1"])
@@ -194,6 +195,14 @@ def main() -> None:
 	merged["selling Price"] = merged[output_price_col]
 	merged["sum Available"] = merged[output_qty_col]
 	merged["Hifi price"] = merged["selling Price"].apply(calculate_hifi_price)
+	merged["Vendor name"] = merged[output_vendor_col].fillna("")
+	merged["Min quantity"] = pd.to_numeric(
+		merged["sum Available"], errors="coerce"
+	).clip(upper=25)
+	merged["price kole"] = (
+		pd.to_numeric(merged["Min quantity"], errors="coerce")
+		* pd.to_numeric(merged["Hifi price"], errors="coerce")
+	).round(2)
 
 	final_df = merged[
 		[
@@ -204,6 +213,9 @@ def main() -> None:
 			"selling Price",
 			"sum Available",
 			"Hifi price",
+			"Vendor name",
+			"Min quantity",
+			"price kole",
 		]
 	].copy()
 
