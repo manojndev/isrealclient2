@@ -11,6 +11,96 @@ BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_FILE = BASE_DIR / "output.xlsx"
 DATABASE_FILE = BASE_DIR / "database.xlsx"
 FINAL_OUTPUT_FILE = BASE_DIR / "finaloutput.xlsx"
+BOL_OUTPUT_FILE = BASE_DIR / "bol.xlsx"
+DIGITEC_OUTPUT_FILE = BASE_DIR / "digitec.xlsx"
+
+
+STATIC_DIGITEC_ROWS = [
+	{
+		"Gtin": "8720389022166",
+		"ProviderKey": "P28398",
+		"ManufacturerKey": "",
+		"BrandName": "PHILIPS",
+		"ProductTitle": "PHILIPS HD9255/30",
+		"PurchasePriceExclVat": 79.00,
+		"Currency": "EURO",
+		"QuantityOnStock": 10,
+		"MinimumOrderQuantity": 10,
+		"Order Quantity Steps": 10,
+	},
+	{
+		"Gtin": "5999024868329",
+		"ProviderKey": "P17424",
+		"ManufacturerKey": "",
+		"BrandName": "Dometic",
+		"ProductTitle": "Dometic ACX3 40 G CombiCool tragbare Absorber-Kuhlbox",
+		"PurchasePriceExclVat": 250.00,
+		"Currency": "EURO",
+		"QuantityOnStock": 9,
+		"MinimumOrderQuantity": 4,
+		"Order Quantity Steps": 4,
+	},
+	{
+		"Gtin": "6934177746512",
+		"ProviderKey": "P7571",
+		"ManufacturerKey": "",
+		"BrandName": "Xiaomi",
+		"ProductTitle": "Xiaomi Auricolari Wireless Redmi Buds 3 Pro Glacier Gray",
+		"PurchasePriceExclVat": 10.00,
+		"Currency": "EURO",
+		"QuantityOnStock": 50,
+		"MinimumOrderQuantity": 30,
+		"Order Quantity Steps": 30,
+	},
+	{
+		"Gtin": "4001627025465",
+		"ProviderKey": "P2186",
+		"ManufacturerKey": "",
+		"BrandName": "GRAEF",
+		"ProductTitle": "GRAEF TB 501 STAND BLENDER",
+		"PurchasePriceExclVat": 31.00,
+		"Currency": "EURO",
+		"QuantityOnStock": 10,
+		"MinimumOrderQuantity": 10,
+		"Order Quantity Steps": 10,
+	},
+	{
+		"Gtin": "6925281982095",
+		"ProviderKey": "P2951",
+		"ManufacturerKey": "",
+		"BrandName": "JBL",
+		"ProductTitle": "JBL Charge 5 Blue",
+		"PurchasePriceExclVat": 63.00,
+		"Currency": "EURO",
+		"QuantityOnStock": 1,
+		"MinimumOrderQuantity": 1,
+		"Order Quantity Steps": 1,
+	},
+	{
+		"Gtin": "4054278497143",
+		"ProviderKey": "P2463",
+		"ManufacturerKey": "",
+		"BrandName": "Karcher",
+		"ProductTitle": "Karcher K7 Comact Home 1.447-053.0",
+		"PurchasePriceExclVat": 291.00,
+		"Currency": "EURO",
+		"QuantityOnStock": 10,
+		"MinimumOrderQuantity": 3,
+		"Order Quantity Steps": 3,
+	},
+	{
+		"Gtin": "0088381779210",
+		"ProviderKey": "P32862",
+		"ManufacturerKey": "",
+		"BrandName": "Makita",
+		"ProductTitle": "DTD173Z Akku-Schlagschrauber LXT",
+		"PurchasePriceExclVat": 128.00,
+		"Currency": "EURO",
+		"QuantityOnStock": 10,
+		"MinimumOrderQuantity": 6,
+		"Order Quantity Steps": 6,
+	},
+]
 
 
 def normalize_gtin(value: object) -> str:
@@ -131,6 +221,36 @@ def calculate_hifi_price(selling_price: object) -> object:
 	return round(price * multiplier, 2)
 
 
+def to_number(value: object) -> float | None:
+	"""Convert values to float when possible, else return None."""
+	if pd.isna(value):
+		return None
+	try:
+		return float(value)
+	except (TypeError, ValueError):
+		return None
+
+
+def calculate_min_quantity(sum_available: object, hifi_price: object) -> object:
+	"""Cap Min quantity to stock<=25 and keep Min quantity*Hifi price <= 1000."""
+	qty_num = to_number(sum_available)
+	price_num = to_number(hifi_price)
+
+	if qty_num is None or qty_num <= 0:
+		return 0
+
+	base_qty = int(min(qty_num, 25))
+	if price_num is None or price_num <= 0:
+		return base_qty
+
+	max_qty_under_1000 = int(1000 // price_num)
+	if max_qty_under_1000 >= 1:
+		return min(base_qty, max_qty_under_1000)
+
+	# If one unit is already above 1000, keep at least 1 instead of dropping to 0.
+	return 1
+
+
 def apply_text_format_to_barcode(path: Path) -> None:
 	wb = load_workbook(path)
 	for sheet_name in ["finaloutput", "new products"]:
@@ -141,7 +261,108 @@ def apply_text_format_to_barcode(path: Path) -> None:
 			row[0].number_format = "@"
 			if len(row) > 1:
 				row[1].number_format = "@"
+
+	if "Aanbod" in wb.sheetnames:
+		ws = wb["Aanbod"]
+		# Internal reference (col B) and Product reference (col C) should stay text.
+		for row in ws.iter_rows(min_row=2, min_col=2, max_col=3):
+			for cell in row:
+				cell.number_format = "@"
+
+	if "digitec" in wb.sheetnames:
+		ws = wb["digitec"]
+		# GTIN (col A) and ProviderKey (col B) should stay text.
+		for row in ws.iter_rows(min_row=2, min_col=1, max_col=2):
+			for cell in row:
+				cell.number_format = "@"
 	wb.save(path)
+
+
+def build_bol_dataframe(final_df: pd.DataFrame) -> pd.DataFrame:
+	"""Build BOL export with requested schema and field mapping."""
+	bol_columns = [
+		"Catalog",
+		"Internal reference",
+		"Product reference",
+		"Name",
+		"Product classification",
+		"List price",
+		"Published price to dealer",
+		"Net purchase price",
+		"Currency",
+		"VAT",
+		"Max delivery time",
+		"Order quantity",
+		"In stock",
+		"Quantity stock",
+		"Release date",
+		"On backorder",
+		"Quantity on backorder",
+		"Replenishment date",
+		"Packing unit",
+		"NPP carton",
+		"Quantity carton",
+		"NPP layer",
+		"Quantity layer",
+		"NPP pallet",
+		"Quantity pallet",
+		"NPP truck",
+		"Quantity truck",
+		"Fulfilment supplier",
+		"Fulfilment ID",
+	]
+
+	bol_df = pd.DataFrame(index=final_df.index, columns=bol_columns)
+	bol_df = bol_df.fillna("")
+
+	bol_df["Internal reference"] = final_df["Hifi code"]
+	bol_df["Product reference"] = final_df["barcode"]
+	bol_df["Name"] = final_df["ProductTitle"]
+	bol_df["Net purchase price"] = final_df["Hifi price"]
+	bol_df["Currency"] = "EUR"
+	bol_df["VAT"] = 21
+	bol_df["Max delivery time"] = 15
+	bol_df["Order quantity"] = final_df["Min quantity"]
+	bol_df["In stock"] = "Y"
+	bol_df["Quantity stock"] = final_df["sum Available"]
+
+	return bol_df
+
+
+def build_digitec_dataframe(final_df: pd.DataFrame) -> pd.DataFrame:
+	"""Build Digitec export with requested schema and field mapping."""
+	digitec_columns = [
+		"Gtin",
+		"ProviderKey",
+		"ManufacturerKey",
+		"BrandName",
+		"ProductTitle",
+		"PurchasePriceExclVat",
+		"Currency",
+		"QuantityOnStock",
+		"MinimumOrderQuantity",
+		"Order Quantity Steps",
+	]
+
+	digitec_df = pd.DataFrame(index=final_df.index, columns=digitec_columns)
+	digitec_df = digitec_df.fillna("")
+
+	digitec_df["Gtin"] = final_df["barcode"]
+	digitec_df["ProviderKey"] = final_df["Hifi code"]
+	digitec_df["ManufacturerKey"] = ""
+	digitec_df["BrandName"] = final_df["Name"]
+	digitec_df["ProductTitle"] = final_df["ProductTitle"]
+	digitec_df["PurchasePriceExclVat"] = final_df["Hifi price"]
+	digitec_df["Currency"] = "EURO"
+	digitec_df["QuantityOnStock"] = final_df["sum Available"]
+	digitec_df["MinimumOrderQuantity"] = final_df["Min quantity"]
+	digitec_df["Order Quantity Steps"] = final_df["Min quantity"]
+
+	# Always append required static Digitec rows at the bottom.
+	static_df = pd.DataFrame(STATIC_DIGITEC_ROWS, columns=digitec_columns)
+	digitec_df = pd.concat([digitec_df, static_df], ignore_index=True)
+
+	return digitec_df
 
 
 def main() -> None:
@@ -160,6 +381,12 @@ def main() -> None:
 	db_title_col = pick_column(db_df, ["roductTitle", "ProductTitle", "Title"])
 
 	output_df["_ean13"] = output_df[output_ean_col].apply(normalize_gtin)
+	output_df["_price_num"] = pd.to_numeric(output_df[output_price_col], errors="coerce")
+	output_df["_qty_num"] = pd.to_numeric(output_df[output_qty_col], errors="coerce")
+	output_df["_stock_value"] = output_df["_price_num"] * output_df["_qty_num"]
+	# Client rule: skip low total-value stock lines (< 100 EUR).
+	output_df = output_df[output_df["_stock_value"] >= 100].copy()
+
 	db_df["_ean13"] = db_df[db_gtin_col].apply(normalize_gtin)
 
 	db_lookup = db_df[
@@ -196,9 +423,10 @@ def main() -> None:
 	merged["sum Available"] = merged[output_qty_col]
 	merged["Hifi price"] = merged["selling Price"].apply(calculate_hifi_price)
 	merged["Vendor name"] = merged[output_vendor_col].fillna("")
-	merged["Min quantity"] = pd.to_numeric(
-		merged["sum Available"], errors="coerce"
-	).clip(upper=25)
+	merged["Min quantity"] = merged.apply(
+		lambda row: calculate_min_quantity(row["sum Available"], row["Hifi price"]),
+		axis=1,
+	)
 	merged["price kole"] = (
 		pd.to_numeric(merged["Min quantity"], errors="coerce")
 		* pd.to_numeric(merged["Hifi price"], errors="coerce")
@@ -227,8 +455,20 @@ def main() -> None:
 		final_df.to_excel(writer, sheet_name="finaloutput", index=False)
 		new_products_df.to_excel(writer, sheet_name="new products", index=False)
 
+	bol_df = build_bol_dataframe(final_df)
+	with pd.ExcelWriter(BOL_OUTPUT_FILE, engine="openpyxl") as writer:
+		bol_df.to_excel(writer, sheet_name="Aanbod", index=False)
+
+	digitec_df = build_digitec_dataframe(final_df)
+	with pd.ExcelWriter(DIGITEC_OUTPUT_FILE, engine="openpyxl") as writer:
+		digitec_df.to_excel(writer, sheet_name="digitec", index=False)
+
 	apply_text_format_to_barcode(FINAL_OUTPUT_FILE)
+	apply_text_format_to_barcode(BOL_OUTPUT_FILE)
+	apply_text_format_to_barcode(DIGITEC_OUTPUT_FILE)
 	print(f"Created: {FINAL_OUTPUT_FILE}")
+	print(f"Created: {BOL_OUTPUT_FILE}")
+	print(f"Created: {DIGITEC_OUTPUT_FILE}")
 
 
 if __name__ == "__main__":

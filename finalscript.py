@@ -44,6 +44,7 @@ Standard Processing Guidelines:
 3. Filtering Rules (Exclude rows if any condition is met):
    - Quantity is <= 4 or invalid.
    - Price is < 2.50 or invalid.
+    - Total stock value (Price * Quantity) is < 100 EUR.
    - Strict- Row represents incoming stock, delivery dates, or estimated dates , Availability (e.g., "incoming 23.03"). Only keep ready/available stock it can be at any column with any header smartly it has to find and not add if not in stock only in stock has to be added.
 {supplier_specific_rules}
 4. Calculations: Calculate "Total Price" = (Price * Quantity).
@@ -63,7 +64,7 @@ DEFAULT_MODEL_NAME = "gemini-3.1-pro"
 
 # Cookie values for authentication
 Secure_1PSID = "g.a0008AiRusOvdEvpaj0tdBOUkfY9cxrDFhM6eczLlgXtUnCBApo21qGp-b3t6WmW8bhhzmD9IAACgYKAfMSARESFQHGX2Miz2KGtM1HfMG-s9iK3y_GshoVAUF8yKpkW22v-Aq8rKwVSa_QBEQQ0076"
-Secure_1PSIDTS = "sidts-CjIBWhotCalB20JWiyVJySA9j2R_qypeTWGoLl-utwiVzL8M_9DkALP2W-19fNtSgtK_SRAA"
+Secure_1PSIDTS = "sidts-CjIBWhotCUzZHezzPqhAOaWjs9VHCQhtbcvTu_54DRCDJWirNnCAtl8KuzkV9500ZHgvBBAA"
 
 if set_log_level is not None:
     set_log_level("INFO")
@@ -341,6 +342,33 @@ def run_pipeline(args: argparse.Namespace):
                 raise KeyError("The generated code did not define a 'process_data' function.")
                 
             processed_data = process_func(raw_data)
+
+            # Safety net: enforce minimum stock-value rule after generated processing.
+            if processed_data and len(processed_data) > 1:
+                header = processed_data[0]
+                header_norm = [str(h).strip().lower().replace(" ", "") for h in header]
+                try:
+                    price_idx = header_norm.index("price")
+                    qty_idx = header_norm.index("stock/quantity")
+                except ValueError:
+                    price_idx = None
+                    qty_idx = None
+
+                if price_idx is not None and qty_idx is not None:
+                    filtered_rows = [header]
+                    for row in processed_data[1:]:
+                        if not isinstance(row, list):
+                            continue
+                        if max(price_idx, qty_idx) >= len(row):
+                            continue
+                        try:
+                            price = float(row[price_idx])
+                            qty = float(row[qty_idx])
+                        except (TypeError, ValueError):
+                            continue
+                        if (price * qty) >= 100:
+                            filtered_rows.append(row)
+                    processed_data = filtered_rows
             
             if not processed_data or len(processed_data) < 2:
                 print(f"Skipped {file_path.name}: Output data was empty after filtering.")
