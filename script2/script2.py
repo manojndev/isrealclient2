@@ -14,6 +14,35 @@ FINAL_OUTPUT_FILE = BASE_DIR / "finaloutput.xlsx"
 BOL_OUTPUT_FILE = BASE_DIR / "bol.xlsx"
 DIGITEC_OUTPUT_FILE = BASE_DIR / "digitec.xlsx"
 
+AKATRONIK_ALLOWED_BRANDS = [
+	"AEG",
+	"BEKO",
+	"BOSCH",
+	"DELONGHI",
+	"ELECTROLUX",
+	"GORENJE",
+	"HISENSE",
+	"LG",
+	"SAMSUNG",
+	"SIEMENS",
+]
+
+BIG_APPLIANCE_KEYWORDS = [
+	"washing machine",
+	"washer",
+	"dryer",
+	"dishwasher",
+	"fridge",
+	"refrigerator",
+	"freezer",
+	"oven",
+	"cooker",
+	"hob",
+	"stove",
+]
+
+APPLE_IOS_DEVICE_REGEX = re.compile(r"\b(iphone|ipad)\b", re.IGNORECASE)
+
 
 STATIC_DIGITEC_ROWS = [
 	{
@@ -221,6 +250,61 @@ def calculate_hifi_price(selling_price: object) -> object:
 	return round(price * multiplier, 2)
 
 
+def is_apple_iphone_or_ipad(brand: object, title: object) -> bool:
+	"""Match Apple iPhone/iPad products to apply dedicated markup."""
+	brand_text = "" if pd.isna(brand) else str(brand).strip().lower()
+	title_text = "" if pd.isna(title) else str(title).strip().lower()
+	combined = f"{brand_text} {title_text}".strip()
+	if not combined:
+		return False
+	if "apple" not in combined:
+		return False
+	return bool(APPLE_IOS_DEVICE_REGEX.search(combined))
+
+
+def calculate_hifi_price_with_overrides(selling_price: object, brand: object, title: object) -> object:
+	"""Apply product-specific overrides before default pricing tiers."""
+	base_price = to_number(selling_price)
+	if base_price is None or base_price <= 0:
+		return ""
+
+	if is_apple_iphone_or_ipad(brand, title):
+		return round(base_price * 1.045, 2)
+
+	return calculate_hifi_price(selling_price)
+
+
+def dedupe_by_ean_lowest_price(
+	df: pd.DataFrame,
+	ean_col: str,
+	price_col: str,
+	qty_col: str,
+) -> pd.DataFrame:
+	"""Keep one row per EAN, selecting the lowest price (then highest stock on ties)."""
+	if df.empty:
+		return df
+
+	work = df.copy()
+	work["_ean_norm"] = work[ean_col].apply(normalize_gtin)
+	work["_price_sort"] = pd.to_numeric(work[price_col], errors="coerce")
+	work["_qty_sort"] = pd.to_numeric(work[qty_col], errors="coerce")
+
+	# Keep rows with valid EAN and price first to maximize deterministic selection quality.
+	with_valid_ean = work[work["_ean_norm"] != ""].copy()
+	without_valid_ean = work[work["_ean_norm"] == ""].copy()
+
+	if not with_valid_ean.empty:
+		with_valid_ean = with_valid_ean.sort_values(
+			by=["_ean_norm", "_price_sort", "_qty_sort"],
+			ascending=[True, True, False],
+			na_position="last",
+		)
+		with_valid_ean = with_valid_ean.drop_duplicates(subset=["_ean_norm"], keep="first")
+
+	combined = pd.concat([with_valid_ean, without_valid_ean], ignore_index=True)
+	return combined.drop(columns=["_ean_norm", "_price_sort", "_qty_sort"], errors="ignore")
+
+
 def to_number(value: object) -> float | None:
 	"""Convert values to float when possible, else return None."""
 	if pd.isna(value):
@@ -251,6 +335,43 @@ def calculate_min_quantity(sum_available: object, hifi_price: object) -> object:
 	return 1
 
 
+def normalize_brand_text(text: object) -> str:
+	if pd.isna(text):
+		return ""
+	value = str(text).strip().upper().replace("'", "")
+	return re.sub(r"[^A-Z0-9 ]+", " ", value)
+
+
+def contains_allowed_akatronik_brand(name: object) -> bool:
+	normalized = f" {normalize_brand_text(name)} "
+	return any(f" {brand} " in normalized for brand in AKATRONIK_ALLOWED_BRANDS)
+
+
+def contains_big_appliance_keyword(name: object) -> bool:
+	if pd.isna(name):
+		return False
+	text = str(name).strip().lower()
+	if not text:
+		return False
+	return any(keyword in text for keyword in BIG_APPLIANCE_KEYWORDS)
+
+
+def apply_supplier_filters(df: pd.DataFrame, supplier_col: str, name_col: str) -> pd.DataFrame:
+	def keep_row(row: pd.Series) -> bool:
+		supplier = str(row.get(supplier_col, "") or "").strip().lower()
+		name = row.get(name_col, "")
+
+		if supplier in {"akatronik", "akatronic"} and not contains_allowed_akatronik_brand(name):
+			return False
+
+		if supplier in {"akatronik", "akatronic", "duna"} and contains_big_appliance_keyword(name):
+			return False
+
+		return True
+
+	return df[df.apply(keep_row, axis=1)].copy()
+
+
 def apply_text_format_to_barcode(path: Path) -> None:
 	wb = load_workbook(path)
 	for sheet_name in ["finaloutput", "new products"]:
@@ -262,12 +383,19 @@ def apply_text_format_to_barcode(path: Path) -> None:
 			if len(row) > 1:
 				row[1].number_format = "@"
 
+		if sheet_name == "finaloutput":
+			for col in (5, 7, 10):
+				for row_idx in range(2, ws.max_row + 1):
+					ws.cell(row=row_idx, column=col).number_format = "0.00"
+
 	if "Aanbod" in wb.sheetnames:
 		ws = wb["Aanbod"]
 		# Internal reference (col B) and Product reference (col C) should stay text.
 		for row in ws.iter_rows(min_row=2, min_col=2, max_col=3):
 			for cell in row:
 				cell.number_format = "@"
+		for row_idx in range(2, ws.max_row + 1):
+			ws.cell(row=row_idx, column=8).number_format = "0.00"
 
 	if "digitec" in wb.sheetnames:
 		ws = wb["digitec"]
@@ -275,6 +403,8 @@ def apply_text_format_to_barcode(path: Path) -> None:
 		for row in ws.iter_rows(min_row=2, min_col=1, max_col=2):
 			for cell in row:
 				cell.number_format = "@"
+		for row_idx in range(2, ws.max_row + 1):
+			ws.cell(row=row_idx, column=6).number_format = "0.00"
 	wb.save(path)
 
 
@@ -386,6 +516,13 @@ def main() -> None:
 	output_df["_stock_value"] = output_df["_price_num"] * output_df["_qty_num"]
 	# Client rule: skip low total-value stock lines (< 100 EUR).
 	output_df = output_df[output_df["_stock_value"] >= 100].copy()
+	output_df = apply_supplier_filters(output_df, output_vendor_col, output_name_col)
+	output_df = dedupe_by_ean_lowest_price(
+		output_df,
+		ean_col=output_ean_col,
+		price_col=output_price_col,
+		qty_col=output_qty_col,
+	)
 
 	db_df["_ean13"] = db_df[db_gtin_col].apply(normalize_gtin)
 
@@ -419,9 +556,16 @@ def main() -> None:
 		merged[db_title_col].notna() & (merged[db_title_col].astype(str).str.strip() != ""),
 		output_title,
 	)
-	merged["selling Price"] = merged[output_price_col]
+	merged["selling Price"] = pd.to_numeric(merged[output_price_col], errors="coerce").round(2)
 	merged["sum Available"] = merged[output_qty_col]
-	merged["Hifi price"] = merged["selling Price"].apply(calculate_hifi_price)
+	merged["Hifi price"] = merged.apply(
+		lambda row: calculate_hifi_price_with_overrides(
+			row["selling Price"],
+			row["Name"],
+			row["ProductTitle"],
+		),
+		axis=1,
+	)
 	merged["Vendor name"] = merged[output_vendor_col].fillna("")
 	merged["Min quantity"] = merged.apply(
 		lambda row: calculate_min_quantity(row["sum Available"], row["Hifi price"]),
