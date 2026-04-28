@@ -4,110 +4,121 @@ def process_data(rows):
     if not rows:
         return []
 
-    # Final headers structure
-    header_out = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
-    
-    ean_idx = -1
-    name_idx = -1
-    price_idx = -1
-    qty_idx = -1
-    producer_idx = -1
-    eta_idx = -1
-    moq_idx = -1
-
-    # Locate the true header row (usually row 1 based on sample)
-    data_start_idx = 0
-    for i, row in enumerate(rows[:5]):
-        row_str = [str(c).lower() if c is not None else "" for c in row]
-        if 'ean' in row_str or 'product code' in row_str:
-            data_start_idx = i + 1
-            for idx, cell in enumerate(row_str):
-                if 'ean' == cell: ean_idx = idx
-                elif 'name of product' in cell: name_idx = idx
-                elif 'net price eur' in cell: price_idx = idx
-                elif 'stock' == cell: qty_idx = idx
-                elif 'producer' in cell: producer_idx = idx
-                elif 'estimated time of arrival' in cell or 'eta' in cell: eta_idx = idx
-                elif 'moq' in cell or 'min qty' in cell: moq_idx = idx
+    # 1. Identify Header Row and Mapping
+    header_idx = -1
+    for i, row in enumerate(rows[:10]):
+        row_str = " ".join([str(c).lower() for c in row if c is not None])
+        if "ean" in row_str and ("price" in row_str or "netto" in row_str):
+            header_idx = i
             break
+    
+    if header_idx == -1:
+        return []
 
-    # If header identification failed, fallback to indices from sample
-    if ean_idx == -1: ean_idx = 12
-    if name_idx == -1: name_idx = 3
-    if price_idx == -1: price_idx = 6
-    if qty_idx == -1: qty_idx = 10
-    if producer_idx == -1: producer_idx = 2
-    if eta_idx == -1: eta_idx = 19
+    headers = [str(h).lower() if h else "" for h in rows[header_idx]]
+    
+    col_map = {
+        "ean": -1,
+        "name": -1,
+        "brand": -1,
+        "price": -1,
+        "stock": -1,
+        "moq": -1,
+        "eta": -1,
+        "incoming": -1
+    }
 
-    has_moq = moq_idx != -1
-    if has_moq:
-        header_out.append("Min Qty")
+    for i, h in enumerate(headers):
+        if "ean" in h: col_map["ean"] = i
+        elif "name of product" in h or "nazwa" in h: col_map["name"] = i
+        elif "producer" in h or "producent" in h: col_map["brand"] = i
+        elif "net price eur" in h: col_map["price"] = i # Prioritize EUR per rules
+        elif col_map["price"] == -1 and ("net price" in h or "cena netto" in h): col_map["price"] = i
+        elif "stock" in h or "stan" in h or "qty" in h: col_map["stock"] = i
+        elif "moq" in h or "minimum order" in h: col_map["moq"] = i
+        elif "estimated time of arrival" in h or "eta" in h: col_map["eta"] = i
+        elif "incoming stock" in h: col_map["incoming"] = i
 
-    final_rows = [header_out]
+    final_header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
+    processed_rows = []
+    found_moq = False
 
-    for row in rows[data_start_idx:]:
-        try:
-            if not row or len(row) <= max(ean_idx, name_idx, price_idx, qty_idx):
-                continue
-
-            # 1. Availability / Incoming Filtering
-            # Exclude if ETA is populated or if row explicitly mentions incoming/OnOrder patterns
-            eta_val = str(row[eta_idx]).strip() if eta_idx != -1 else ""
-            if eta_val and eta_val.lower() != 'none' and eta_val != '0':
-                continue
-
-            # 2. Extract and Clean Quantity
-            raw_qty = str(row[qty_idx]).strip()
-            qty_clean = "".join(filter(str.isdigit, raw_qty))
-            quantity = int(qty_clean) if qty_clean else 0
-            
-            if quantity <= 4:
-                continue
-
-            # 3. Extract and Clean Price
-            raw_price = str(row[price_idx]).strip()
-            price_clean = re.sub(r'[^\d.,]', '', raw_price).replace(',', '.')
-            price = float(price_clean) if price_clean else 0.0
-            
-            if price < 2.50:
-                continue
-
-            # 4. Total Stock Value Filter
-            total_price = price * quantity
-            if total_price < 100.0:
-                continue
-
-            # 5. Extract and Clean EAN (13-digit string)
-            raw_ean = str(row[ean_idx]).strip()
-            ean_digits = "".join(filter(str.isdigit, raw_ean))
-            if not ean_digits:
-                continue
-            ean_final = ean_digits.zfill(13)
-
-            # 6. Name construction
-            producer = str(row[producer_idx]).strip() if producer_idx != -1 else ""
-            prod_name = str(row[name_idx]).strip()
-            # Avoid repeating producer if already in name
-            full_name = f"{producer} {prod_name}" if producer.lower() not in prod_name.lower() else prod_name
-
-            # Construct row
-            processed_row = [
-                ean_final,
-                full_name.strip(),
-                price,
-                quantity,
-                round(total_price, 2),
-                "cennik"
-            ]
-
-            if has_moq:
-                raw_moq = str(row[moq_idx]).strip()
-                moq_clean = "".join(filter(str.isdigit, raw_moq))
-                processed_row.append(int(moq_clean) if moq_clean else 1)
-
-            final_rows.append(processed_row)
-
-        except (ValueError, IndexError):
+    # 2. Process Data Rows
+    for row in rows[header_idx + 1:]:
+        if not row or len(row) <= max(col_map.values()):
             continue
 
-    return final_rows
+        # Extract Raw Values
+        raw_ean = str(row[col_map["ean"]]) if col_map["ean"] != -1 else ""
+        raw_name = str(row[col_map["name"]]) if col_map["name"] != -1 else ""
+        raw_brand = str(row[col_map["brand"]]) if col_map["brand"] != -1 else ""
+        raw_price = str(row[col_map["price"]]) if col_map["price"] != -1 else "0"
+        raw_stock = str(row[col_map["stock"]]) if col_map["stock"] != -1 else "0"
+        
+        # Filtering: MAKITA only
+        full_name = f"{raw_brand} {raw_name}".strip()
+        if "makita" not in full_name.lower():
+            continue
+
+        # Availability/Strict Row Filtering
+        eta = str(row[col_map["eta"]]).strip() if col_map["eta"] != -1 else ""
+        incoming = str(row[col_map["incoming"]]).strip() if col_map["incoming"] != -1 else "0"
+        if eta or (incoming != "0" and incoming != ""):
+            continue
+
+        # Clean EAN (13 digits)
+        ean_clean = re.sub(r'\D', '', raw_ean)
+        ean_clean = ean_clean.zfill(13) if ean_clean else ""
+        if not ean_clean:
+            continue
+
+        # Clean Price (Float)
+        price_clean = raw_price.replace(',', '.')
+        price_clean = re.sub(r'[^\d.]', '', price_clean)
+        try:
+            price = float(price_clean)
+        except ValueError:
+            continue
+
+        # Clean Quantity (Int)
+        qty_clean = re.sub(r'\D', '', raw_stock)
+        try:
+            qty = int(qty_clean)
+        except ValueError:
+            continue
+
+        # Standard Processing Filters
+        if qty <= 4 or price < 2.50:
+            continue
+        
+        total_price = round(price * qty, 2)
+        if total_price < 100.0:
+            continue
+
+        # MOQ Extraction
+        moq = 0
+        if col_map["moq"] != -1:
+            try:
+                moq = int(re.sub(r'\D', '', str(row[col_map["moq"]])))
+                if moq > 0: found_moq = True
+            except ValueError:
+                moq = 0
+
+        # Build Output Row
+        res_row = [ean_clean, full_name, price, qty, total_price, "cennik"]
+        if col_map["moq"] != -1 or found_moq:
+            res_row.append(moq)
+        
+        processed_rows.append(res_row)
+
+    # 3. Finalize Output Structure
+    if found_moq:
+        final_header.append("Min Qty")
+        # Ensure all rows have MOQ column
+        for r in processed_rows:
+            if len(r) == 6: r.append(0)
+    else:
+        # If MOQ index existed but no values found, strip the extra column
+        processed_rows = [r[:6] for r in processed_rows]
+
+    return [final_header] + processed_rows

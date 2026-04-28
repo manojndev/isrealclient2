@@ -2,107 +2,104 @@ import re
 
 def process_data(rows):
     if not rows:
-        return []
+        return [["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]]
 
-    # Final headers
-    header_out = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
-    
-    ean_idx = -1
-    name_idx = -1
-    price_idx = -1
-    qty_idx = -1
-    moq_idx = -1
-    avail_idx = -1
+    def clean_ean(val):
+        s = re.sub(r'\D', '', str(val))
+        return s.zfill(13) if s else ""
 
-    # Analyze potential header row (row 0)
-    first_row = [str(x).upper() if x is not None else "" for x in rows[0]]
-    for i, col in enumerate(first_row):
-        if 'EAN' in col: ean_idx = i
-        elif any(x in col for x in ['ARTICLE', 'PRODUCT', 'MODEL', 'DESCRIPTION', 'NAME']): name_idx = i
-        elif 'PRICE' in col or 'EUR' in col: price_idx = i
-        elif 'QTY' in col or 'QUANTITY' in col or 'STÜCK' in col: qty_idx = i
-        elif 'MOQ' in col or 'MIN' in col: moq_idx = i
-        elif 'AVAIL' in col or 'STOCK' in col or 'STATUS' in col: avail_idx = i
-
-    # Data pattern fallback for inference
-    if len(rows) > 1:
-        sample = rows[1]
-        for i, val in enumerate(sample):
-            if val is None: continue
-            s_val = str(val).strip()
-            # EAN usually 12-13 digits
-            if ean_idx == -1 and s_val.isdigit() and len(s_val) >= 12: ean_idx = i
-            # Price usually has decimals or is a float
-            elif price_idx == -1 and (isinstance(val, float) or ('.' in s_val and s_val.replace('.', '').isdigit())):
-                if i != ean_idx: price_idx = i
-            # Qty usually integer
-            elif qty_idx == -1 and (isinstance(val, (int, float)) or s_val.isdigit()) and i not in [ean_idx, price_idx]:
-                qty_idx = i
-
-    # Detect if MOQ column exists
-    has_moq = moq_idx != -1
-    if has_moq:
-        header_out.append("Min Qty")
-
-    final_data = [header_out]
-    
-    # Skip header row if identified
-    start_row = 1 if ean_idx != -1 or name_idx != -1 or 'QTY' in first_row else 0
-
-    for row in rows[start_row:]:
+    def clean_float(val):
+        if val is None or val == '': return 0.0
+        s = str(val).replace(',', '.')
+        s = re.sub(r'[^\d.]', '', s)
         try:
-            # Availability Filtering (Strict)
-            if avail_idx != -1 and avail_idx < len(row):
-                status = str(row[avail_idx]).lower()
-                if any(x in status for x in ["incoming", "delivery", "expected", "202", "nachschub"]):
-                    if "in stock" not in status:
-                        continue
+            return float(s)
+        except:
+            return 0.0
 
-            # EAN Cleaning
-            raw_ean = str(row[ean_idx]).strip() if ean_idx < len(row) and row[ean_idx] is not None else ""
-            ean_clean = "".join(filter(str.isdigit, raw_ean))
-            if not ean_clean: continue
-            ean_final = ean_clean.zfill(13)
+    def clean_int(val):
+        if val is None or val == '': return 0
+        s = re.sub(r'\D', '', str(val))
+        try:
+            return int(s)
+        except:
+            return 0
 
-            # Name Cleaning
-            name_final = str(row[name_idx]).strip() if name_idx < len(row) and row[name_idx] is not None else ""
-            if not name_final: continue
+    col_map = {"ean": None, "name": None, "price": None, "qty": None, "moq": None, "avail": None}
+    
+    # Identify header row and map columns
+    header_idx = -1
+    for i, row in enumerate(rows[:10]):
+        row_str = [str(c).lower() if c is not None else "" for c in row]
+        if any(key in " ".join(row_str) for key in ["ean", "article", "price", "qty", "stock"]):
+            header_idx = i
+            for idx, col_name in enumerate(row_str):
+                if "ean" in col_name: col_map["ean"] = idx
+                elif any(x in col_name for x in ["article", "description", "name", "model"]): col_map["name"] = idx
+                elif "price" in col_name or "preis" in col_name: col_map["price"] = idx
+                elif any(x in col_name for x in ["qty", "stock", "menge", "stk"]): col_map["qty"] = idx
+                elif "moq" in col_name or "min" in col_name: col_map["moq"] = idx
+                elif "avail" in col_name or "status" in col_name: col_map["avail"] = idx
+            break
 
-            # Price Cleaning
-            raw_price = str(row[price_idx]) if price_idx < len(row) and row[price_idx] is not None else "0"
-            price_str = re.sub(r'[^\d.,]', '', raw_price).replace(',', '.')
-            price_final = float(price_str) if price_str else 0.0
+    # Heuristic inference if headers are missing
+    if col_map["ean"] is None or col_map["price"] is None:
+        start = header_idx + 1 if header_idx != -1 else 0
+        for i in range(start, min(len(rows), start + 5)):
+            row = rows[i]
+            if not any(row): continue
+            for idx, cell in enumerate(row):
+                val = str(cell) if cell is not None else ""
+                digits = re.sub(r'\D', '', val)
+                if len(digits) >= 12 and col_map["ean"] is None: col_map["ean"] = idx
+                elif any(x in val.lower() for x in ["amazon", "samsung", "apple", "generation"]) and col_map["name"] is None: col_map["name"] = idx
+                elif "." in val and col_map["price"] is None: col_map["price"] = idx
+                elif val.isdigit() and col_map["qty"] is None: col_map["qty"] = idx
 
-            # Quantity Cleaning
-            raw_qty = str(row[qty_idx]) if qty_idx < len(row) and row[qty_idx] is not None else "0"
-            qty_str = "".join(filter(str.isdigit, raw_qty.split('.')[0])) # Handle 110.0 cases
-            qty_final = int(qty_str) if qty_str else 0
+    data_start = header_idx + 1 if header_idx != -1 else 0
+    final_rows = []
+    has_moq = False
 
-            # Filtering Rules
-            if qty_final <= 4: continue
-            if price_final < 2.50: continue
-            
-            total_price = price_final * qty_final
-            if total_price < 100.0: continue
-
-            # Construct Row
-            processed_row = [
-                ean_final,
-                name_final,
-                price_final,
-                qty_final,
-                round(total_price, 2),
-                "itrade"
-            ]
-
-            if has_moq:
-                raw_moq = str(row[moq_idx]) if moq_idx < len(row) and row[moq_idx] is not None else "1"
-                moq_clean = "".join(filter(str.isdigit, raw_moq))
-                processed_row.append(int(moq_clean) if moq_clean else 1)
-
-            final_data.append(processed_row)
-
-        except (ValueError, IndexError):
+    for row in rows[data_start:]:
+        if not any(row) or len(row) <= max((v for v in col_map.values() if v is not None), default=0):
             continue
 
-    return final_data
+        # Availability/Incoming filter
+        row_content = " ".join(str(c).lower() for c in row if c is not None)
+        if any(term in row_content for term in ["incoming", "eta", "delivery", "expected", "ordered", "on order"]):
+            continue
+        if col_map["avail"] is not None:
+            avail_val = str(row[col_map["avail"]]).lower()
+            if any(term in avail_val for term in ["incoming", "backorder", "expected"]):
+                continue
+
+        ean = clean_ean(row[col_map["ean"]]) if col_map["ean"] is not None else ""
+        name = str(row[col_map["name"]]).strip() if col_map["name"] is not None else ""
+        price = clean_float(row[col_map["price"]]) if col_map["price"] is not None else 0.0
+        qty = clean_int(row[col_map["qty"]]) if col_map["qty"] is not None else 0
+        
+        # Validation and Filtering
+        if len(ean) < 8 or not name or price < 2.50 or qty <= 4:
+            continue
+        
+        total_price = round(price * qty, 2)
+        if total_price < 100.0:
+            continue
+
+        processed_row = [ean, name, price, qty, total_price, "itrade"]
+        
+        if col_map["moq"] is not None:
+            moq_val = clean_int(row[col_map["moq"]])
+            processed_row.append(moq_val)
+            has_moq = True
+            
+        final_rows.append(processed_row)
+
+    header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
+    if has_moq:
+        header.append("Min Qty")
+        # Ensure consistency for rows where MOQ might be missing
+        for r in final_rows:
+            if len(r) < 7: r.append(0)
+
+    return [header] + final_rows

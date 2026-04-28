@@ -1,100 +1,126 @@
 import re
 
-def process_data(rows):
-    header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
-    processed_rows = [header]
-    
-    col_map = {
-        "ean": -1,
-        "name": -1,
-        "manufacturer": -1,
-        "price": -1,
-        "qty": -1,
-        "stock_status": -1
-    }
+def process_data(rows: list[list]) -> list[list]:
+    if not rows:
+        return []
 
-    # Find the real header row and identify column indices
-    data_start_idx = 0
-    for r_idx, row in enumerate(rows):
-        row_str = [str(c).lower() if c is not None else "" for c in row]
-        if "ean" in row_str and ("price" in " ".join(row_str) or "qty" in row_str):
-            data_start_idx = r_idx + 1
-            for c_idx, cell in enumerate(row_str):
-                if "ean" in cell: col_map["ean"] = c_idx
-                elif "item" in cell or "product" in cell: col_map["name"] = c_idx
-                elif "manufacturer" in cell or "brand" in cell: col_map["manufacturer"] = c_idx
-                elif "price" in cell: col_map["price"] = c_idx
-                elif "qty" in cell or "quantity" in cell: col_map["qty"] = c_idx
-                elif "stock" in cell or "availability" in cell: col_map["stock_status"] = c_idx
+    # Find the header row by looking for key columns
+    header_idx = -1
+    col_map = {}
+    
+    for i, row in enumerate(rows):
+        if not row:
+            continue
+        row_lower = [str(c).lower().strip() if c is not None else "" for c in row]
+        if any("ean" in c for c in row_lower) and any("price" in c for c in row_lower):
+            header_idx = i
+            for j, cell in enumerate(row_lower):
+                if "ean" in cell:
+                    col_map['ean'] = j
+                elif "price" in cell:
+                    col_map['price'] = j
+                elif "qty" in cell or "quantity" in cell:
+                    col_map['qty'] = j
+                elif "manufacturer" in cell or "brand" in cell:
+                    col_map['brand'] = j
+                elif "item" in cell or "description" in cell or "name" in cell:
+                    col_map['name'] = j
+                elif "stock" in cell or "availability" in cell:
+                    col_map['stock'] = j
             break
 
-    # Filtering keywords for large appliances
-    excluded_keywords = ["washing machine", "dryer", "dishwasher", "refrigerator", "freezer", "oven", "hob", "cooker", "stove"]
+    if header_idx == -1 or 'ean' not in col_map or 'price' not in col_map:
+        return []
 
-    for row in rows[data_start_idx:]:
-        if not row or len(row) <= max(col_map.values()):
+    final_rows = [["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]]
+    
+    appliance_keywords = [
+        'washing machine', 'dryer', 'dishwasher', 'refrigerator', 
+        'freezer', 'oven', 'hob', 'cooker', 'stove'
+    ]
+    incoming_keywords = ['incoming', 'delivery', 'estimated', 'expected']
+
+    for row in rows[header_idx + 1:]:
+        if not row or all(c is None for c in row):
             continue
 
-        # Extract and Clean EAN
-        ean_val = str(row[col_map["ean"]]) if col_map["ean"] != -1 else ""
-        ean_clean = "".join(filter(str.isdigit, ean_val))
-        if not ean_clean:
-            continue
-        ean_final = ean_clean.zfill(13)
+        def get_val(key):
+            idx = col_map.get(key, -1)
+            if 0 <= idx < len(row) and row[idx] is not None:
+                return str(row[idx]).strip()
+            return ""
 
-        # Extract and Clean Name
-        brand = str(row[col_map["manufacturer"]]).strip() if col_map["manufacturer"] != -1 and row[col_map["manufacturer"]] else ""
-        item_name = str(row[col_map["name"]]).strip() if col_map["name"] != -1 and row[col_map["name"]] else ""
-        full_name = f"{brand} {item_name}".strip()
+        ean_raw = get_val('ean')
+        price_raw = get_val('price')
+        qty_raw = get_val('qty')
+        brand_raw = get_val('brand')
+        name_raw = get_val('name')
+        stock_raw = get_val('stock')
+
+        # Clean EAN
+        ean = re.sub(r'\D', '', ean_raw)
+        if not ean:
+            continue
+        ean = ean.zfill(13)
+
+        # Clean Name
+        name_parts = []
+        if brand_raw:
+            name_parts.append(brand_raw)
+        if name_raw:
+            name_parts.append(name_raw)
+        name = " ".join(name_parts).strip()
+        if not name:
+            continue
+
+        # Strict Duna Filter: Exclude large appliances
+        name_lower = name.lower()
+        if any(kw in name_lower for kw in appliance_keywords):
+            continue
+
+        # Clean Price
+        price_match = re.search(r'[\d\.]+', price_raw.replace(',', '.'))
+        if not price_match:
+            continue
+        try:
+            price = float(price_match.group(0))
+        except ValueError:
+            continue
+
+        # Clean Quantity
+        qty_match = re.search(r'\d+', qty_raw)
+        if not qty_match:
+            continue
+        try:
+            qty = int(qty_match.group(0))
+        except ValueError:
+            continue
+
+        # Stock / Availability check
+        row_str = " ".join([str(c).lower() for c in row if c is not None])
+        if any(kw in row_str for kw in incoming_keywords):
+            continue
         
-        # DUNA Filter: Large Appliances
-        name_lower = full_name.lower()
-        if any(kw in name_lower for kw in excluded_keywords):
-            continue
-
-        # Extract and Clean Price
-        try:
-            raw_price = str(row[col_map["price"]]) if col_map["price"] != -1 else "0"
-            price_clean = re.sub(r'[^\d.]', '', raw_price.replace(',', '.'))
-            price_val = float(price_clean)
-        except (ValueError, TypeError):
-            continue
-
-        # Extract and Clean Quantity
-        try:
-            raw_qty = str(row[col_map["qty"]]) if col_map["qty"] != -1 else "0"
-            qty_clean = "".join(filter(str.isdigit, raw_qty))
-            qty_val = int(qty_clean)
-        except (ValueError, TypeError):
-            continue
-
-        # Stock Availability Filter
-        if col_map["stock_status"] != -1:
-            status = str(row[col_map["stock_status"]]).lower()
-            # If it contains digits but isn't just a number, it's likely a date (incoming)
-            if any(char.isdigit() for char in status) and "." in status:
+        # If there's a specific stock column, ensure it signifies available stock
+        # and explicitly exclude dates indicating incoming stock (e.g. 23.03)
+        if 'stock' in col_map and stock_raw:
+            stock_lower = stock_raw.lower()
+            if re.search(r'\d{1,2}[\./-]\d{1,2}', stock_lower):
                 continue
-            if "ready" not in status and "in stock" not in status and status != "":
-                if "incoming" in status or "expected" in status:
-                    continue
+            if not any(kw in stock_lower for kw in ['ready', 'available', 'in stock', 'ok', 'yes', 'on stock']):
+                # Strict enforcement to only keep ready/available items if stock column is populated
+                continue
 
-        # Standard Filtering Rules
-        if qty_val <= 4:
+        # Filtering conditions
+        if qty <= 4:
             continue
-        if price_val < 2.50:
+        if price < 2.50:
             continue
         
-        total_price = price_val * qty_val
-        if total_price < 100.0:
+        total_price = round(price * qty, 2)
+        if total_price < 100:
             continue
 
-        processed_rows.append([
-            ean_final,
-            full_name,
-            price_val,
-            qty_val,
-            total_price,
-            "duna"
-        ])
+        final_rows.append([ean, name, price, qty, total_price, "duna"])
 
-    return processed_rows
+    return final_rows

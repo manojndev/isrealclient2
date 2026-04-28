@@ -22,7 +22,7 @@ except Exception:
 
 SYSTEM_PROMPT = """You are an expert Python data processing assistant.
 Your task is to write a single, complete Python function named `process_data(rows)`.
-The input `rows` is a list of lists (representing rows and columns of an Excel/CSV file).
+The input `rows` is a list of lists (representing rows and columns of an Excel/CSV/TXT file).
 The first element of the returned list of lists MUST be the clean, final header row.
 
 Rules:
@@ -34,6 +34,9 @@ Rules:
 
 USER_PROMPT_TEMPLATE = """Sample raw rows (first {sample_count} rows of the file):
 {sample_rows}
+
+Input-type specific rules:
+{input_specific_rules}
 
 Standard Processing Guidelines:
 1. Column Identification: Systematically identify "EAN", "Name", "Price", and "Stock/Quantity" columns despite varying headers. If headers are missing, infer based on data patterns (e.g., 13 digits = EAN, text = Name, currency/decimals = Price, integers = Quantity).
@@ -65,7 +68,7 @@ DEFAULT_MODEL_NAME = "gemini-3-pro"
 
 # Cookie values for authentication
 Secure_1PSID = "g.a0009AjBI9hSRdlgkzMwaBFwfFO6IRDz7luAOtDwA9ukyvCaGGtJ-QuMcNlLj0XEkU_iAutgRQACgYKAXMSARMSFQHGX2MihMTN1gZhGq2mmGmUreStzxoVAUF8yKoh9C953oCF0ljkS01l1pMx0076"
-Secure_1PSIDTS = "sidts-CjEBWhotCSqmH8uPAooyw7E8FPujZzZ-PFbcbNvxz_HdukMG69UKqTSZXTw9uucFu4UJEAA"
+Secure_1PSIDTS = "sidts-CjEBhkeRd-RB4ow0iqw5hTYn4F39jc898OhdpyhdjbenS2R_TO6xKLi5yCNZpGkhFGfoEAA"
 
 if set_log_level is not None:
     set_log_level("INFO")
@@ -90,6 +93,10 @@ AKATRONIK_ALLOWED_BRANDS = [
     "SIEMENS",
 ]
 
+CENNIK_ALLOWED_BRANDS = [
+    "MAKITA",
+]
+
 BIG_APPLIANCE_KEYWORDS = [
     "washing machine",
     "washer",
@@ -102,6 +109,10 @@ BIG_APPLIANCE_KEYWORDS = [
     "cooker",
     "hob",
     "stove",
+    "tv",
+    "television",
+    "air conditioner",
+    "ac unit",
 ]
 
 
@@ -299,12 +310,42 @@ def read_csv_raw(path: Path) -> list[list[Any]]:
     with path.open("r", newline="", encoding="utf-8-sig") as f:
         return [row for row in csv.reader(f)]
 
+
+def read_txt_raw(path: Path) -> list[list[Any]]:
+    with path.open("r", encoding="utf-8-sig", errors="replace") as f:
+        lines = [line.strip() for line in f if line.strip()]
+
+    if not lines:
+        return []
+
+    delimiter_candidates = [";", "|", "\t", ","]
+    best_delimiter = None
+    best_score = 0
+
+    for delimiter in delimiter_candidates:
+        parsed = [line.split(delimiter) for line in lines[:25]]
+        col_counts = [len(row) for row in parsed]
+        if not col_counts:
+            continue
+        has_multiple_columns = sum(1 for count in col_counts if count > 1)
+        if has_multiple_columns > best_score:
+            best_score = has_multiple_columns
+            best_delimiter = delimiter
+
+    if best_delimiter and best_score > 0:
+        return [[cell.strip() for cell in line.split(best_delimiter)] for line in lines]
+
+    # Fallback for free-form mail offer text: one line per row.
+    return [[line] for line in lines]
+
 def read_data_raw(path: Path, sheet: str | int | None) -> list[list[Any]]:
     suffix = path.suffix.lower()
     if suffix in {".xlsx", ".xlsm", ".xltx", ".xltm", ".xls"}:
         return read_excel_raw(path, sheet)
     if suffix == ".csv":
         return read_csv_raw(path)
+    if suffix == ".txt":
+        return read_txt_raw(path)
     raise ValueError("Unsupported input format.")
 
 
@@ -354,9 +395,61 @@ def _normalize_brand_text(text: Any) -> str:
     return re.sub(r"[^A-Z0-9 ]+", " ", value)
 
 
+def _extract_price_from_product_name(name: Any) -> float | None:
+    """Smart extraction of price from product name using regex patterns.
+    Detects patterns like: €100, 99.99, $50, 100EUR, etc."""
+    if name is None:
+        return None
+    text = str(name).strip()
+    # Pattern: optional currency symbol + digits + optional decimals
+    pattern = r'[€$£]?\s*(\d+(?:[.,]\d{2})?)\s*(?:EUR|€|$)?'
+    matches = re.findall(pattern, text, re.IGNORECASE)
+    if matches:
+        try:
+            # Take the largest price found
+            prices = [float(m.replace(',', '.')) for m in matches]
+            return max(prices) if prices else None
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _is_big_appliance_regex(name: Any) -> bool:
+    """Enhanced detection using regex with word boundaries for more accurate matching."""
+    if name is None:
+        return False
+    text = str(name).strip().lower()
+    if not text:
+        return False
+    
+    # Use word boundaries for more precise matching
+    patterns = [
+        r'\bwashing\s+machine\b',
+        r'\bwasher\b',
+        r'\bdryer\b',
+        r'\bdishwasher\b',
+        r'\bfridge\b|\brefrigerator\b',
+        r'\bfreezer\b',
+        r'\b(oven|cooker|hob|stove)\b',
+        r'\btv\b|\btelevision\b',
+        r'\bair\s+conditioner\b|\bac\s+unit\b',
+    ]
+    
+    for pattern in patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
+    return False
+
+
 def _contains_allowed_akatronik_brand(name: Any) -> bool:
     normalized = f" {_normalize_brand_text(name)} "
     return any(f" {brand} " in normalized for brand in AKATRONIK_ALLOWED_BRANDS)
+
+
+def _contains_allowed_cennik_brand(name: Any) -> bool:
+    """Check if name contains ONLY MAKITA brand for cennik supplier."""
+    normalized = f" {_normalize_brand_text(name)} "
+    return any(f" {brand} " in normalized for brand in CENNIK_ALLOWED_BRANDS)
 
 
 def _contains_big_appliance_keyword(name: Any) -> bool:
@@ -412,6 +505,14 @@ def _apply_supplier_guardrail_filters(processed_data: list[list[Any]]) -> list[l
     except ValueError:
         return processed_data
 
+    # Try to find price and quantity indices for advanced filtering
+    try:
+        price_idx = normalized_header.index("price")
+        qty_idx = normalized_header.index("stock/quantity")
+    except ValueError:
+        price_idx = None
+        qty_idx = None
+
     filtered_rows = [header]
     for row in processed_data[1:]:
         if not isinstance(row, list):
@@ -422,11 +523,31 @@ def _apply_supplier_guardrail_filters(processed_data: list[list[Any]]) -> list[l
         supplier = str(row[supplier_idx] or "").strip().lower()
         name = row[name_idx]
 
-        if supplier in {"akatronik", "akatronic"} and not _contains_allowed_akatronik_brand(name):
-            continue
+        # AKATRONIK: Only allowed brands + filter by total price > 100 EUR
+        # NOTE: Removed TV/washing-machine exclusion per user request.
+        if supplier in {"akatronik", "akatronic"}:
+            if not _contains_allowed_akatronik_brand(name):
+                continue
+            # Filter out items with total price > 100 EUR (keep only <= 100 EUR)
+            if price_idx is not None and qty_idx is not None and max(price_idx, qty_idx) < len(row):
+                try:
+                    price = float(row[price_idx])
+                    qty = float(row[qty_idx])
+                    total_price = price * qty
+                    if total_price > 100:
+                        continue  # Skip expensive items (> 100 EUR)
+                except (TypeError, ValueError):
+                    pass  # If conversion fails, keep the row
 
-        if supplier in {"akatronik", "akatronic", "duna"} and _contains_big_appliance_keyword(name):
-            continue
+        # CENNIK: ONLY MAKITA brand allowed
+        elif supplier == "cennik":
+            if not _contains_allowed_cennik_brand(name):
+                continue
+
+        # DUNA: Exclude big appliances (both keyword and regex)
+        elif supplier == "duna":
+            if _contains_big_appliance_keyword(name) or _is_big_appliance_regex(name):
+                continue
 
         filtered_rows.append(row)
 
@@ -497,21 +618,39 @@ def _dedupe_by_ean_lowest_price(processed_data: list[list[Any]]) -> list[list[An
     return [header, *best_by_ean.values(), *passthrough_rows]
 
 
-def format_prompt(sample_rows: list[list[Any]], instruction: str, supplier_name: str) -> str:
+def format_prompt(
+    sample_rows: list[list[Any]],
+    instruction: str,
+    supplier_name: str,
+    file_suffix: str,
+) -> str:
     sample_str = ""
     for idx, row in enumerate(sample_rows):
         sample_str += f"Row {idx}: {row}\n"
+
+    input_specific_rules = "   - None"
+    if file_suffix.lower() == ".txt":
+        input_specific_rules = (
+            "   - STRICT TXT MAIL-OFFER PARSING: Input may be free-form email text. "
+            "Ignore greetings, signatures, logistics notes, payment terms, and non-product lines. "
+            "Extract product rows from unstructured text by detecting product identifiers and numeric signals. "
+            "Infer EAN/Name/Price/Stock even when labels vary. "
+            "If one text line contains multiple product chunks, split into separate product rows before final output."
+        )
         
     supplier_rules = ""
     supplier_key = supplier_name.lower().strip()
     if supplier_key in {"akatronik", "akatronic"}:
-        supplier_rules = "   - STRICT AKATRONIK FILTER: You MUST ONLY KEEP items where the Name contains one of these exact brands (ignoring case): AEG, BEKO, BOSCH, De'Longhi, ELECTROLUX, Gorenje, Hisense, LG, SAMSUNG, Siemens. Otherwise, filter out the entire row."
+        supplier_rules = "   - STRICT AKATRONIK FILTER: (1) You MUST ONLY KEEP items where the Name contains one of these exact brands (ignoring case): AEG, BEKO, BOSCH, De'Longhi, ELECTROLUX, Gorenje, Hisense, LG, SAMSUNG, Siemens. (2) EXCLUDE obvious large appliances (washing machines, TVs, dishwashers, refrigerators, etc.). (3) EXCLUDE items where Total Price (Price × Quantity) is GREATER THAN 100 EUR. Otherwise, filter out the entire row."
+    elif supplier_key == "cennik":
+        supplier_rules = "   - STRICT CENNIK FILTER: You MUST ONLY KEEP items where the Name contains 'MAKITA' brand (ignoring case and spelling variations). Exclude all other brands without exception. This is a MAKITA-only supplier."
     elif supplier_key == "duna":
         supplier_rules = "   - STRICT DUNA FILTER: Exclude obvious large appliances from Name text (washing machine, dryer, dishwasher, refrigerator/freezer, oven/hob/cooker/stove)."
         
     return USER_PROMPT_TEMPLATE.format(
         sample_count=len(sample_rows),
         sample_rows=sample_str,
+        input_specific_rules=input_specific_rules,
         instruction=instruction,
         supplier_name=supplier_name,
         supplier_specific_rules=supplier_rules
@@ -535,7 +674,7 @@ def extract_code_from_pasted_input() -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Smart Excel/CSV processor powered by LLM code generation (Folder batch mode).")
-    p.add_argument("--input-folder", default="input", help="Folder containing .xlsx/.xlsm/.csv files")
+    p.add_argument("--input-folder", default="input", help="Folder containing .xlsx/.xlsm/.csv/.txt files")
     p.add_argument("--sheet", help="Excel sheet name or index")
     p.add_argument("--output", default="output.xlsx", help="Output file path")
     p.add_argument("--output-format", default="excel", choices=["excel", "csv", "csv_pipe"])
@@ -576,7 +715,7 @@ def run_pipeline(args: argparse.Namespace):
         print(f"Please put your Excel/CSV files in the '{input_folder}' directory and rerun the script.")
         return
 
-    all_files = [f for f in input_folder.iterdir() if f.suffix.lower() in {'.xlsx', '.xls', '.xlsm', '.csv'}]
+    all_files = [f for f in input_folder.iterdir() if f.suffix.lower() in {'.xlsx', '.xls', '.xlsm', '.csv', '.txt'}]
     
     if not all_files:
         print(f"No valid data files found in folder: {input_folder}")
@@ -630,7 +769,7 @@ def run_pipeline(args: argparse.Namespace):
                 continue
 
             sample_rows = raw_data[:15]
-            prompt = format_prompt(sample_rows, args.instruction, supplier_name)
+            prompt = format_prompt(sample_rows, args.instruction, supplier_name, file_path.suffix)
 
             if args.print_prompts:
                 print(f"\n===== PROMPTS FOR {file_path.name} =====")
