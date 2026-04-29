@@ -498,116 +498,62 @@ def _contains_akatronik_big_appliance(name: Any) -> bool:
     compact = normalized.replace(" ", "")
 
     phrase_patterns = [
-        r"\bwashing\s*machine\b",
-        r"\bwashing\s*machines\b",
-        r"\bwash\s*machine\b",
-        r"\bwash\s*machines\b",
-        r"\bwaschmaschinen\b",
-        r"\bmachine\s*a\s*laver\b",
-        r"\blave[-\s]*linge\b",
-        r"\bmaquina\s*de\s*lavar\b",
-        r"\bmaquina\s*de\s*lavar\s*ropa\b",
-        r"\blavadora\b",
-        r"\blavadoras\b",
-        r"\blavatrice\b",
-        r"\blavatrici\b",
-        r"\bwaschmaschine\b",
-        r"\bspu(?:l|\u0308l)?maschine\b",
-        r"\bgeschirrspuler\b",
-        r"\bkuhlschrank\b",
-        r"\bwasmachine\b",
-        r"\bwasmachines\b",
-        r"\bwasher\b",
-        r"\bwashers\b",
-        r"\bdryer\b",
-        r"\bdryers\b",
-        r"\basciugatrice\b",
-        r"\basciugatrici\b",
-        r"\bsecadora\b",
-        r"\bsecadoras\b",
-        r"\bdish\s*washer\b",
-        r"\bdish\s*washers\b",
-        r"\bdishwasher\b",
-        r"\bdishwashers\b",
-        r"\blavavajillas\b",
-        r"\blave\s*vaisselle\b",
-        r"\bfridge\b",
-        r"\bfridges\b",
-        r"\brefrigerator\b",
-        r"\brefrigerators\b",
-        r"\brefrigirator\b",
-        r"\brefridgerator\b",
-        r"\brefrigerador\b",
-        r"\brefrigeradores\b",
-        r"\bfrigorifero\b",
-        r"\bfrigoriferi\b",
-        r"\bfrigorifico\b",
-        r"\bfrigo\b",
-        r"\bfreezer\b",
-        r"\bfreezers\b",
-        r"\bcongelador\b",
-        r"\bcongeladores\b",
-        r"\bcongelateur\b",
-        r"\bcongelateurs\b",
-        r"\b(oven|cooker|hob|stove)\b",
-        r"\bhorno\b",
-        r"\bhornos\b",
-        r"\bfour\b",
-        r"\bfours\b",
-        r"\bforno\b",
-        r"\bfornos\b",
-        r"\btv\b",
-        r"\btvs\b",
-        r"\btelevision\b",
-        r"\btelevisions\b",
-        r"\btelevisor\b",
-        r"\btelevisores\b",
-        r"\bfernseher\b",
-        r"\bfernsehgerate\b",
-        r"\bair\s*conditioner\b",
-        r"\bair\s*conditioners\b",
-        r"\bac\s*unit\b",
-        r"\bac\s*units\b",
-        r"\bklimaanlage\b",
-        r"\bklimaanlagen\b",
-        r"\bclimatiseur\b",
-        r"\bclimatiseurs\b",
-        # German Washers & Dryers
-        r"\bwaschtrockner\b",
-        r"\bwa(?:r|\u0308r)?mepumpentrockner\b",
-        r"\btrockner\b",
+        # --- Washing Machines ---
+        # Catches: washing, waching, wahsing, washmachine
+        r"was[hc]ing\s*machines?",
+        r"wah?sing\s*machines?",
+        r"wash\s*machines?",
+        r"washers?",
+        # German: waschmaschine, wachmaschine, wasmaschine
+        r"wasc?hmaschin[en]?",       
+        r"waschtrockner",        
+        # Romance languages
+        r"machine\s*a\s*laver",
+        r"lave[-\s]*linge",
+        r"maquina\s*de\s*lavar(?:\s*ropa)?",
+        r"lavadoras?",
+        r"lavatrici?",
+        r"wasmachines?",
 
-        # German Refrigeration (Freezers, Combos, Side-by-Side)
-        r"\bku(?:h|\u0308h)?l[- ]?gefrierkombination\b",
-        r"\bgefrierschrank\b",
-        r"\bgefriertruhe\b",
-        r"\bside[- ]?by[- ]?side\b",
-        r"\bmultidoor\b",
+        # --- Dishwashers ---
+        # Catches: dishwasher, diswasher, dichwasher
+        r"di[sc]h\s*washers?",
+        # German: Geschirrspüler, Geschirspüler, Geschirspuler, Geschirrspühler
+        r"geschirr?spu(?:l|ll|\u0308l|h?l)er", 
+        # German: Spülmaschine, Spulmaschine, Spühlmaschine
+        r"spu(?:l|ll|\u0308l|h?l)maschine",
+        # Romance languages
+        r"lavavajillas",
+        r"lave\s*vaisselle",
 
-        # German Dishwasher (adding umlaut support, existing only has geschirrspuler)
-        r"\bgeschirrspu(?:l|\u0308l)?er\b",
+        # --- Refrigerators & Freezers ---
+        # Catches: refrigerator, refridgerator, refrigirator, referigerator
+        r"refr[ie]d?g[ie]rators?",    
+        r"fridges?",
+        r"freezers?",
+        # German: Kühlschrank, Kuhlschrank, Kulschrank, Khulschrank
+        r"k(?:u|ue|\u0308)?h?lschrank",      
+        # German: Kühl-Gefrier, Kuh-Gefrier, Kulgefrier
+        r"k(?:u|ue|\u0308)?h?l?[- ]?gefrier",  
+        r"gefrierschrank",
+        r"gefriertruhe",
+        r"side[- ]?by[- ]?side",
+        r"french[- ]?door",
+        r"multidoor",
+        # Romance languages
+        r"refrigeradores?",
+        r"frigorifer[oi]",
+        r"frigorifico",
+        r"frigo",
+        r"congeladores?",
+        r"congelateurs?",
 
-        # German Ovens, Stoves, Hobs & Hoods
-        r"\bbackofen\b",
-        r"\beinbaubackofen\b",
-        r"\bdampfbackofen\b",
-        r"\bherd\b",
-        r"\bherdset\b",
-        r"\beinbauherd\b",
-        r"\bkochfeld\b",
-        r"\binduktionskochfeld\b",
-        r"\bgaskochfeld\b",
-        r"\bglaskeramikkochfeld\b",
-        r"\bdunstabzugshaube\b",
-        r"\bdunstabzug\b",
-        r"\bflachschirmhaube\b",
-
-        # Other large electronics from your list
-        r"\bmikrowelle\b",
-        r"\beinbaumikrowelle\b",
-        r"\bsoundbar\b",
-        r"\bmonitor\b",
-        r"\bgaming[- ]?monitor\b"
+        # --- Air Conditioners ---
+        # Catches: air conditioner, air conditoner
+        r"air\s*condit[io]ners?",
+        r"ac\s*units?",
+        r"klimaanlagen?",
+        r"climatiseurs?"
     ]
 
     if any(re.search(pattern, normalized, re.IGNORECASE) for pattern in phrase_patterns):
