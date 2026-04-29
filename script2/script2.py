@@ -14,7 +14,7 @@ FINAL_OUTPUT_FILE = BASE_DIR / "finaloutput.xlsx"
 BOL_OUTPUT_FILE = BASE_DIR / "bol.xlsx"
 DIGITEC_OUTPUT_FILE = BASE_DIR / "digitec.xlsx"
 
-AKATRONIK_ALLOWED_BRANDS = [
+AKATRONIK_DISALLOWED_BRANDS = [
 	"AEG",
 	"BEKO",
 	"BOSCH",
@@ -342,9 +342,9 @@ def normalize_brand_text(text: object) -> str:
 	return re.sub(r"[^A-Z0-9 ]+", " ", value)
 
 
-def contains_allowed_akatronik_brand(name: object) -> bool:
+def contains_disallowed_akatronik_brand(name: object) -> bool:
 	normalized = f" {normalize_brand_text(name)} "
-	return any(f" {brand} " in normalized for brand in AKATRONIK_ALLOWED_BRANDS)
+	return any(f" {brand} " in normalized for brand in AKATRONIK_DISALLOWED_BRANDS)
 
 
 def contains_big_appliance_keyword(name: object) -> bool:
@@ -361,7 +361,7 @@ def apply_supplier_filters(df: pd.DataFrame, supplier_col: str, name_col: str) -
 		supplier = str(row.get(supplier_col, "") or "").strip().lower()
 		name = row.get(name_col, "")
 
-		if supplier in {"akatronik", "akatronic"} and not contains_allowed_akatronik_brand(name):
+		if supplier in {"akatronik", "akatronic"} and contains_disallowed_akatronik_brand(name):
 			return False
 
 		if supplier in {"akatronik", "akatronic", "duna"} and contains_big_appliance_keyword(name):

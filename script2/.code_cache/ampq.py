@@ -2,100 +2,103 @@ import re
 
 def process_data(rows):
     if not rows:
-        return []
+        return [["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]]
 
-    def clean_ean(val):
-        s = re.sub(r'\D', '', str(val))
-        return s.zfill(13) if s else None
-
-    def clean_price(val):
+    # Helper to clean numeric values
+    def clean_num(val):
         if val is None: return None
-        s = str(val).replace('€', '').replace('$', '').replace(',', '').strip()
+        s = str(val).strip()
+        # Remove currency symbols and comma separators
+        s = re.sub(r'[^\d.,-]', '', s)
+        if not s: return None
+        # Handle European decimal commas
+        if ',' in s and '.' in s:
+            s = s.replace(',', '')
+        elif ',' in s:
+            s = s.replace(',', '.')
         try:
             return float(s)
         except ValueError:
             return None
 
-    def clean_qty(val):
-        if val is None: return None
-        s = re.sub(r'[^0-9]', '', str(val))
+    # Identify column indices
+    header = [str(c).upper().strip() for c in rows[0]]
+    idx_map = {}
+    
+    # Try to find indices by header names
+    for i, h in enumerate(header):
+        if any(x in h for x in ['EAN', 'GTIN', 'BARCODE']): idx_map['ean'] = i
+        elif any(x in h for x in ['MODEL', 'NAME', 'DESCRIPTION', 'PRODUCT']): idx_map['name'] = i
+        elif any(x in h for x in ['PRICE', 'UNIT PRICE', 'COST']): idx_map['price'] = i
+        elif any(x in h for x in ['QTY', 'AVAILABILITY', 'STOCK', 'QUANTITY', 'AMNT']): 
+            # Differentiate between Stock count and Status text if possible
+            val_sample = str(rows[1][i]).lower() if len(rows) > 1 else ""
+            if any(char.isdigit() for char in val_sample):
+                idx_map['qty'] = i
+            else:
+                idx_map['status'] = i
+
+    # Fallback/Inference logic if headers failed
+    if 'ean' not in idx_map or 'name' not in idx_map or 'price' not in idx_map:
+        sample = rows[1] if len(rows) > 1 else rows[0]
+        for i, val in enumerate(sample):
+            s_val = str(val).strip()
+            if re.match(r'^\d{10,15}$', s_val): idx_map['ean'] = i
+            elif any(x in s_val.lower() for x in ['apple', 'samsung', 'iphone', 'gb']): idx_map['name'] = i
+            elif '.' in s_val and clean_num(s_val) is not None: idx_map['price'] = i
+
+    # Final Output Header
+    output_header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
+    final_data = [output_header]
+
+    # Process Data Rows (skip header)
+    for row in rows[1:]:
         try:
-            return int(s)
-        except ValueError:
-            return None
-
-    # Identify Column Indices
-    ean_idx = name_idx = price_idx = qty_idx = avail_idx = moq_idx = -1
-    
-    # Try to find headers in the first 2 rows
-    for r_idx in range(min(2, len(rows))):
-        row_str = [str(c).upper() for c in rows[r_idx]]
-        for i, col in enumerate(row_str):
-            if any(x in col for x in ['EAN', 'GTIN', 'BARCODE']): ean_idx = i
-            elif any(x in col for x in ['MODEL', 'NAME', 'DESCRIPTION', 'PRODUCT']): name_idx = i
-            elif any(x in col for x in ['PRICE', 'UNIT COST']): price_idx = i
-            elif any(x in col for x in ['QTY', 'STOCK', 'QUANTITY', 'AMOUNT']): qty_idx = i
-            elif any(x in col for x in ['AVAIL', 'STATUS']): avail_idx = i
-            elif 'MOQ' in col or 'MIN' in col: moq_idx = i
-
-    # Fallback inference based on data if headers failed
-    sample_row = rows[1] if len(rows) > 1 else rows[0]
-    for i, val in enumerate(sample_row):
-        val_s = str(val)
-        if ean_idx == -1 and len(re.sub(r'\D', '', val_s)) >= 10: ean_idx = i
-        if qty_idx == -1 and val_s.isdigit() and int(val_s) < 1000 and i != ean_idx: qty_idx = i
-        if price_idx == -1 and ('.' in val_s or val_s.isdigit()) and i not in [ean_idx, qty_idx]: price_idx = i
-        if name_idx == -1 and len(val_s) > 10 and i not in [ean_idx, price_idx]: name_idx = i
-
-    final_header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
-    if moq_idx != -1:
-        final_header.append("Min Qty")
-    
-    result = [final_header]
-    exclude_terms = ['refurbished', 'renewed', 'reconditioned', 'remanufactured']
-    not_in_stock_terms = ['incoming', 'delivery', 'estimated', 'backorder', 'soon']
-
-    for i, row in enumerate(rows):
-        # Skip header if it looks like one
-        if i == 0 and any(isinstance(c, str) and c.upper() in ['EAN', 'QTY', 'PRICE'] for c in row):
-            continue
+            # Extract basic fields
+            raw_ean = str(row[idx_map.get('ean', 3)]).strip()
+            ean = re.sub(r'\D', '', raw_ean).zfill(13)
             
-        if len(row) <= max(ean_idx, name_idx, price_idx, qty_idx):
+            name = str(row[idx_map.get('name', 1)]).strip()
+            
+            price = clean_num(row[idx_map.get('price', 4)])
+            qty = int(clean_num(row[idx_map.get('qty', 0)])) if idx_map.get('qty') is not None else 0
+            
+            # Check for Availability status text
+            status_idx = idx_map.get('status')
+            status_text = str(row[status_idx]).lower() if status_idx is not None else ""
+            
+            # Filtering Logic
+            # 1. Refurbished filter
+            forbidden = ['refurbished', 'renewed', 'reconditioned', 'remanufactured']
+            if any(word in name.lower() for word in forbidden):
+                continue
+                
+            # 2. Availability filter (only in stock)
+            if "incoming" in status_text or "delivery" in status_text or "estimated" in status_text:
+                continue
+            if "out of stock" in status_text:
+                continue
+                
+            # 3. Numeric constraints
+            if qty <= 4:
+                continue
+            if price is None or price < 2.50:
+                continue
+                
+            total_price = price * qty
+            if total_price < 100:
+                continue
+
+            # Validated row construction
+            final_data.append([
+                ean,
+                name,
+                price,
+                qty,
+                round(total_price, 2),
+                "ampq"
+            ])
+        except (ValueError, IndexError, TypeError):
             continue
 
-        name = str(row[name_idx]) if name_idx != -1 else ""
-        ean = clean_ean(row[ean_idx]) if ean_idx != -1 else None
-        price = clean_price(row[price_idx]) if price_idx != -1 else None
-        qty = clean_qty(row[qty_idx]) if qty_idx != -1 else None
-        avail = str(row[avail_idx]).lower() if avail_idx != -1 else ""
-        
-        # Validation & Filtering
-        if not ean or not name or price is None or qty is None:
-            continue
-        
-        if qty <= 4:
-            continue
-        if price < 2.50:
-            continue
-        
-        total_price = price * qty
-        if total_price < 100:
-            continue
-            
-        name_lower = name.lower()
-        if any(term in name_lower for term in exclude_terms):
-            continue
-        
-        # Availability Check
-        if any(term in avail for term in not_in_stock_terms) or any(term in name_lower for term in not_in_stock_terms):
-            continue
-        
-        clean_row = [ean, name, price, qty, total_price, "ampq"]
-        
-        if moq_idx != -1:
-            moq = clean_qty(row[moq_idx])
-            clean_row.append(moq if moq is not None else 0)
-            
-        result.append(clean_row)
-
-    return result
+    return final_data

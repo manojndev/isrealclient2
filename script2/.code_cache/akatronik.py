@@ -1,99 +1,115 @@
 import re
 
-def process_data(rows):
+def process_data(rows: list) -> list:
     if not rows:
-        return []
+        return [["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]]
 
-    def clean_ean(val):
-        s = re.sub(r'\D', '', str(val))
-        return s.zfill(13) if s else None
+    header_row = rows[0]
+    data_rows = rows[1:]
 
-    def clean_float(val):
-        if val is None: return None
-        try:
-            s = str(val).replace('€', '').replace('$', '').strip()
-            return float(s)
-        except:
-            return None
+    # Indices for mapping
+    idx_qty = -1
+    idx_manuf = -1
+    idx_type1 = -1
+    idx_type2 = -1
+    idx_ean = -1
+    idx_price = -1
 
-    def clean_int(val):
-        if val is None: return None
-        try:
-            s = re.sub(r'[^\d]', '', str(val))
-            return int(s) if s else None
-        except:
-            return None
+    # Heuristic identification based on sample or headers
+    for i, col in enumerate(header_row):
+        col_name = str(col).lower()
+        if 'sum available' in col_name or 'qty' in col_name or 'available' in col_name:
+            idx_qty = i
+        elif 'manufacturer' in col_name or 'brand' in col_name:
+            idx_manuf = i
+        elif 'article type' in col_name or 'type1' in col_name or 'description' in col_name:
+            idx_type1 = i
+        elif 'type2' in col_name:
+            idx_type2 = i
+        elif 'barcode' in col_name or 'ean' in col_name:
+            idx_ean = i
+        elif 'price' in col_name:
+            idx_price = i
 
-    # Identify columns dynamically
-    header = rows[0]
-    sample_data = rows[1:6] if len(rows) > 1 else []
-    
-    col_map = {"stock": -1, "brand": -1, "name1": -1, "name2": -1, "ean": -1, "price": -1}
-    
-    # Try mapping by header names first
-    for i, h in enumerate(header):
-        h_lower = str(h).lower()
-        if 'sum available' in h_lower: col_map["stock"] = i
-        elif 'manufacturer' in h_lower: col_map["brand"] = i
-        elif 'article type' in h_lower: col_map["name1"] = i
-        elif 'type2' in h_lower: col_map["name2"] = i
-        elif 'barcode' in h_lower or 'ean' in h_lower: col_map["ean"] = i
-        elif 'price' in h_lower: col_map["price"] = i
-
-    # Fallback/Validation with data patterns
-    for row in sample_data:
-        for i, val in enumerate(row):
-            if col_map["ean"] == -1 and len(re.sub(r'\D', '', str(val))) >= 12: col_map["ean"] = i
-            if col_map["price"] == -1 and isinstance(val, (float, int)) and i != col_map["stock"]: col_map["price"] = i
-
-    final_header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
-    processed = [final_header]
-
-    # Filters
-    excluded_brands = {'aeg', 'beko', 'bosch', 'de\'longhi', 'delonghi', 'electrolux', 'gorenje', 'hisense', 'lg', 'samsung', 'siemens'}
+    # Regex for big appliances (multilingual)
     appliances_pattern = re.compile(
-        r'washing\s?machine|washmachine|waschmaschine|wasmachine|lavadora|lavatrice|machine\s?a\s?laver|maquina\s?de\s?lavar|'
-        r'dryer|secadora|dishwasher|lavavajillas|lave\s?vaisselle|refrigerator|frigorifero|fridge|freezer|'
-        r'oven|tv\b|television|televisor|fernseher|air\s?conditioner|climatiseur|klimaanlage', 
+        r"(wash(ing)?\s?machine|waschmaschine|wasmachine|lavadora|lavatrice|machine\s[àa]\slaver|maquina\sde\slavar|"
+        r"dryer|secadora|secador|tumble|trockner|dishwasher|lavavajillas|lave\svaisselle|vaatwasser|lavastoviglie|"
+        r"refrigerator|frigorifero|fridge|kühlschrank|koelkast|freezer|gefrierschrank|oven|backofen|forno|"
+        r"television|televisor|fernseher|\btv\b|air\sconditioner|climatiseur|klimaanlage)",
         re.IGNORECASE
     )
-    refurb_pattern = re.compile(r'refurbished|renewed|reconditioned|remanufactured', re.IGNORECASE)
 
-    for row in rows[1:]:
-        # Extract base values
-        qty = clean_int(row[col_map["stock"]]) if col_map["stock"] != -1 else None
-        price = clean_float(row[col_map["price"]]) if col_map["price"] != -1 else None
-        ean = clean_ean(row[col_map["ean"]]) if col_map["ean"] != -1 else ""
-        brand = str(row[col_map["brand"]]).strip() if col_map["brand"] != -1 else ""
-        n1 = str(row[col_map["name1"]]).strip() if col_map["name1"] != -1 else ""
-        n2 = str(row[col_map["name2"]]).strip() if (col_map["name2"] != -1 and row[col_map["name2"]] is not None) else ""
-        
-        full_name = f"{brand} {n1} {n2}".strip().replace('\xa0', ' ')
-        full_name = ' '.join(full_name.split()) # Clean whitespaces
+    excluded_brands = {
+        "aeg", "beko", "bosch", "de'longhi", "delonghi", "electrolux", 
+        "gorenje", "hisense", "lg", "samsung", "siemens"
+    }
 
-        # Validations
-        if qty is None or qty <= 4: continue
-        if price is None or price < 2.50: continue
-        
-        # Refurbished Filter
-        if refurb_pattern.search(full_name): continue
-        
-        # Akatronik Specific Brand Filter
-        if any(b in full_name.lower() for b in excluded_brands): continue
-        
-        # Akatronik Specific Appliance Filter
-        if appliances_pattern.search(full_name): continue
+    refurbished_terms = ["refurbished", "renewed", "reconditioned", "remanufactured"]
 
-        total_price = round(price * qty, 2)
-        
-        # Add row
-        processed.append([
-            ean,
-            full_name,
-            price,
-            qty,
-            total_price,
-            "akatronik"
-        ])
+    result = [["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]]
 
-    return processed
+    for row in data_rows:
+        # 1. Extraction & Cleaning
+        try:
+            # Quantity
+            raw_qty = str(row[idx_qty]) if idx_qty != -1 else "0"
+            qty_clean = int(float(re.sub(r'[^\d.-]', '', raw_qty))) if any(c.isdigit() for c in raw_qty) else 0
+            
+            # Price
+            raw_price = str(row[idx_price]) if idx_price != -1 else "0"
+            price_clean = re.sub(r'[^\d.,]', '', raw_price).replace(',', '.')
+            price = float(price_clean) if price_clean else 0.0
+            
+            # EAN
+            raw_ean = str(row[idx_ean]) if idx_ean != -1 else ""
+            ean = "".join(filter(str.isdigit, raw_ean)).zfill(13)
+            
+            # Name Construction
+            manuf = str(row[idx_manuf]).strip() if idx_manuf != -1 and row[idx_manuf] else ""
+            t1 = str(row[idx_type1]).strip() if idx_type1 != -1 and row[idx_type1] else ""
+            t2 = str(row[idx_type2]).strip() if idx_type2 != -1 and row[idx_type2] else ""
+            full_name = " ".join(filter(None, [manuf, t1, t2]))
+            
+            # Availability logic (Status check)
+            availability_text = ""
+            for cell in row:
+                cell_str = str(cell).lower()
+                if any(x in cell_str for x in ["incoming", "delivery", "estimated", "expected"]):
+                    availability_text = cell_str
+                    break
+            
+            # 2. Filtering
+            if qty_clean <= 4: continue
+            if price < 2.50: continue
+            if availability_text: continue
+            
+            # Refurbished check
+            name_lower = full_name.lower()
+            if any(term in name_lower for term in refurbished_terms):
+                continue
+                
+            # AKATRONIK Brand Filter
+            if any(brand in name_lower for brand in excluded_brands):
+                continue
+                
+            # AKATRONIK Big Appliances Filter
+            if appliances_pattern.search(name_lower):
+                continue
+
+            # 3. Final Row Build
+            total_price = price * qty_clean
+            
+            result.append([
+                ean,
+                full_name,
+                price,
+                qty_clean,
+                round(total_price, 2),
+                "akatronik"
+            ])
+
+        except (ValueError, IndexError, TypeError):
+            continue
+
+    return result
