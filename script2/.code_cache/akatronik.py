@@ -6,99 +6,94 @@ def process_data(rows):
 
     def clean_ean(val):
         s = re.sub(r'\D', '', str(val))
-        return s.zfill(13) if s else ""
+        return s.zfill(13) if s else None
 
-    def clean_price(val):
-        if val is None: return 0.0
-        s = str(val).replace('€', '').replace('$', '').replace(',', '.').strip()
+    def clean_float(val):
+        if val is None: return None
         try:
-            return float(re.sub(r'[^\d.]', '', s))
+            s = str(val).replace('€', '').replace('$', '').strip()
+            return float(s)
         except:
-            return 0.0
+            return None
 
-    def clean_qty(val):
-        if val is None: return 0
-        s = re.sub(r'\D', '', str(val))
+    def clean_int(val):
+        if val is None: return None
         try:
-            return int(s)
+            s = re.sub(r'[^\d]', '', str(val))
+            return int(s) if s else None
         except:
-            return 0
+            return None
 
-    # Column Mapping
-    ean_idx = name_idx = price_idx = qty_idx = brand_idx = moq_idx = -1
+    # Identify columns dynamically
+    header = rows[0]
+    sample_data = rows[1:6] if len(rows) > 1 else []
     
-    header_row = rows[0]
-    header_str = [str(c).lower() for c in header_row]
+    col_map = {"stock": -1, "brand": -1, "name1": -1, "name2": -1, "ean": -1, "price": -1}
     
-    for i, col in enumerate(header_str):
-        if any(x in col for x in ['barcode', 'ean', 'gtin']): ean_idx = i
-        elif any(x in col for x in ['article type', 'description', 'name']): name_idx = i
-        elif any(x in col for x in ['price', 'selling']): price_idx = i
-        elif any(x in col for x in ['available', 'qty', 'stock', 'sum']): qty_idx = i
-        elif any(x in col for x in ['manufacturer', 'brand']): brand_idx = i
-        elif 'moq' in col or 'min' in col: moq_idx = i
+    # Try mapping by header names first
+    for i, h in enumerate(header):
+        h_lower = str(h).lower()
+        if 'sum available' in h_lower: col_map["stock"] = i
+        elif 'manufacturer' in h_lower: col_map["brand"] = i
+        elif 'article type' in h_lower: col_map["name1"] = i
+        elif 'type2' in h_lower: col_map["name2"] = i
+        elif 'barcode' in h_lower or 'ean' in h_lower: col_map["ean"] = i
+        elif 'price' in h_lower: col_map["price"] = i
 
-    # Akatronik specific rules
-    allowed_brands = {'AEG', 'BEKO', 'BOSCH', "DE'LONGHI", 'ELECTROLUX', 'GORENJE', 'HISENSE', 'LG', 'SAMSUNG', 'SIEMENS'}
-    
-    big_appliances = [
-        'washing machine', 'washmachine', 'waschmaschine', 'wasmachine', 'lavadora', 'lavatrice', 
-        'machine a laver', 'maquina de lavar', 'dryer', 'secadora', 'dishwasher', 'lavavajillas', 
-        'lave vaisselle', 'refrigerator', 'frigorifero', 'fridge', 'freezer', 'oven', 'tv', 
-        'television', 'televisor', 'fernseher', 'air conditioner', 'climatiseur', 'klimaanlage'
-    ]
-    appliance_regex = re.compile(r'\b(' + '|'.join(big_appliances) + r')\b', re.IGNORECASE)
-    exclude_terms = ['refurbished', 'renewed', 'reconditioned', 'remanufactured', 'incoming', 'delivery', 'estimated']
+    # Fallback/Validation with data patterns
+    for row in sample_data:
+        for i, val in enumerate(row):
+            if col_map["ean"] == -1 and len(re.sub(r'\D', '', str(val))) >= 12: col_map["ean"] = i
+            if col_map["price"] == -1 and isinstance(val, (float, int)) and i != col_map["stock"]: col_map["price"] = i
 
-    processed_rows = []
-    has_moq = False
-    
-    for i, row in enumerate(rows):
-        if i == 0 and ean_idx != -1: continue # Skip header
-        if len(row) < 3: continue
+    final_header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
+    processed = [final_header]
 
-        # Extract values
-        raw_ean = row[ean_idx] if ean_idx != -1 else ""
-        raw_name = str(row[name_idx]) if name_idx != -1 else ""
-        raw_brand = str(row[brand_idx]) if brand_idx != -1 else ""
-        raw_price = row[price_idx] if price_idx != -1 else 0
-        raw_qty = row[qty_idx] if qty_idx != -1 else 0
+    # Filters
+    excluded_brands = {'aeg', 'beko', 'bosch', 'de\'longhi', 'delonghi', 'electrolux', 'gorenje', 'hisense', 'lg', 'samsung', 'siemens'}
+    appliances_pattern = re.compile(
+        r'washing\s?machine|washmachine|waschmaschine|wasmachine|lavadora|lavatrice|machine\s?a\s?laver|maquina\s?de\s?lavar|'
+        r'dryer|secadora|dishwasher|lavavajillas|lave\s?vaisselle|refrigerator|frigorifero|fridge|freezer|'
+        r'oven|tv\b|television|televisor|fernseher|air\s?conditioner|climatiseur|klimaanlage', 
+        re.IGNORECASE
+    )
+    refurb_pattern = re.compile(r'refurbished|renewed|reconditioned|remanufactured', re.IGNORECASE)
+
+    for row in rows[1:]:
+        # Extract base values
+        qty = clean_int(row[col_map["stock"]]) if col_map["stock"] != -1 else None
+        price = clean_float(row[col_map["price"]]) if col_map["price"] != -1 else None
+        ean = clean_ean(row[col_map["ean"]]) if col_map["ean"] != -1 else ""
+        brand = str(row[col_map["brand"]]).strip() if col_map["brand"] != -1 else ""
+        n1 = str(row[col_map["name1"]]).strip() if col_map["name1"] != -1 else ""
+        n2 = str(row[col_map["name2"]]).strip() if (col_map["name2"] != -1 and row[col_map["name2"]] is not None) else ""
         
-        full_name = f"{raw_brand} {raw_name}".strip()
-        ean = clean_ean(raw_ean)
-        price = clean_price(raw_price)
-        qty = clean_qty(raw_qty)
-        
-        # Akatronik Brand Filter
-        brand_match = any(b.lower() in full_name.lower() for b in allowed_brands)
-        if not brand_match:
-            continue
+        full_name = f"{brand} {n1} {n2}".strip().replace('\xa0', ' ')
+        full_name = ' '.join(full_name.split()) # Clean whitespaces
 
-        # Exclusion Filters
-        name_lower = full_name.lower()
-        if any(term in name_lower for term in exclude_terms):
-            continue
-        if appliance_regex.search(name_lower):
-            continue
-            
-        # Basic Requirements
-        if qty <= 4 or price < 2.50 or not ean:
-            continue
-            
+        # Validations
+        if qty is None or qty <= 4: continue
+        if price is None or price < 2.50: continue
+        
+        # Refurbished Filter
+        if refurb_pattern.search(full_name): continue
+        
+        # Akatronik Specific Brand Filter
+        if any(b in full_name.lower() for b in excluded_brands): continue
+        
+        # Akatronik Specific Appliance Filter
+        if appliances_pattern.search(full_name): continue
+
         total_price = round(price * qty, 2)
         
-        entry = [ean, full_name, price, qty, total_price, "akatronik"]
-        
-        if moq_idx != -1:
-            has_moq = True
-            moq_val = clean_qty(row[moq_idx])
-            entry.append(moq_val)
-            
-        processed_rows.append(entry)
+        # Add row
+        processed.append([
+            ean,
+            full_name,
+            price,
+            qty,
+            total_price,
+            "akatronik"
+        ])
 
-    # Prepare Final Header
-    final_header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
-    if has_moq:
-        final_header.append("Min Qty")
-        
-    return [final_header] + processed_rows
+    return processed

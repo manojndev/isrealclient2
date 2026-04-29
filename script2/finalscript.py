@@ -82,7 +82,7 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
 DEFAULT_GENERATION_ATTEMPTS = 3
 DEFAULT_CODE_CACHE_DIR = ".code_cache"
 
-AKATRONIK_ALLOWED_BRANDS = [
+AKATRONIK_DISALLOWED_BRANDS = [
     "AEG",
     "BEKO",
     "BOSCH",
@@ -100,21 +100,80 @@ CENNIK_ALLOWED_BRANDS = [
 ]
 
 BIG_APPLIANCE_KEYWORDS = [
-    "washing machine",
-    "washer",
-    "dryer",
-    "dishwasher",
-    "fridge",
-    "refrigerator",
-    "freezer",
-    "oven",
-    "cooker",
-    "hob",
-    "stove",
-    "tv",
-    "television",
-    "air conditioner",
-    "ac unit",
+    # --- Washing Machines ---
+    r"was[hc]ing\s*machines?",
+    r"wah?sing\s*machines?",
+    r"wash\s*machines?",
+    r"washers?",
+    r"wasc?hmaschin[en]?",
+    r"waschtrockner",
+    r"machine\s*a\s*laver",
+    r"lave[-\s]*linge",
+    r"maquina\s*de\s*lavar(?:\s*ropa)?",
+    r"lavadoras?",
+    r"lavatrici?",
+    r"wasmachines?",
+
+    # --- Dryers & Drying Machines ---
+    r"dryers?",
+    r"asciugatrici?",
+    r"secadoras?",
+    r"trocknmaschinen?",
+    r"trocknmaschine",
+    r"secadoras?",
+    r"seche[-\s]*linge",
+
+    # --- Dishwashers ---
+    r"di[sc]h\s*washers?",
+    r"geschirr?spu(?:l|ll|\u0308l|h?l)er",
+    r"spu(?:l|ll|\u0308l|h?l)maschine",
+    r"lavavajillas",
+    r"lave\s*vaisselle",
+
+    # --- Refrigerators & Freezers ---
+    r"refr[ie]d?g[ie]rators?",
+    r"fridges?",
+    r"freezers?",
+    r"k(?:u|ue|\u0308)?h?lschrank",
+    r"k(?:u|ue|\u0308)?h?l?[- ]?gefrier",
+    r"gefrierschrank",
+    r"gefriertruhe",
+    r"side[- ]?by[- ]?side",
+    r"french[- ]?door",
+    r"multidoor",
+    r"refrigeradores?",
+    r"frigorifer[oi]",
+    r"frigorifico",
+    r"frigo",
+    r"congeladores?",
+    r"congelateurs?",
+
+    # --- Ovens, Cookers, Hobs & Stoves ---
+    r"ovens?",
+    r"backofen",
+    r"backofen|backof(?:en)?",
+    r"cookers?",
+    r"hobs?",
+    r"kochfelds?",
+    r"stoves?",
+    r"herds?",
+    r"horno(?:s)?",
+    r"fourneaux?",
+    r"forno(?:s)?",
+
+    # --- Television ---
+    r"tvs?",
+    r"televisions?",
+    r"televisors?",
+    r"fernseher",
+    r"fernsehgerate",
+    r"televisores?",
+
+    # --- Air Conditioners ---
+    r"air\s*condit[io]ners?",
+    r"ac\s*units?",
+    r"klimaanlagen?",
+    r"climatiseurs?",
 ]
 
 REFURBISHED_KEYWORDS = [
@@ -468,9 +527,15 @@ def _contains_refurbished_term(name: Any) -> bool:
     return any(re.search(pattern, text, re.IGNORECASE) for pattern in REFURBISHED_KEYWORDS)
 
 
-def _contains_allowed_akatronik_brand(name: Any) -> bool:
-    normalized = f" {_normalize_brand_text(name)} "
-    return any(f" {brand} " in normalized for brand in AKATRONIK_ALLOWED_BRANDS)
+def _contains_disallowed_akatronik_brand(name: Any) -> bool:
+    normalized = _normalize_brand_text(name)
+    if not normalized:
+        return False
+    for brand in AKATRONIK_DISALLOWED_BRANDS:
+        # Match whole brand tokens to avoid partial hits inside larger words.
+        if re.search(rf"(?:^|\s){re.escape(brand)}(?:\s|$)", normalized):
+            return True
+    return False
 
 
 def _contains_allowed_cennik_brand(name: Any) -> bool:
@@ -483,7 +548,7 @@ def _contains_big_appliance_keyword(name: Any) -> bool:
     normalized = str(name or "").strip().lower()
     if not normalized:
         return False
-    return any(keyword in normalized for keyword in BIG_APPLIANCE_KEYWORDS)
+    return any(re.search(keyword, normalized, re.IGNORECASE) for keyword in BIG_APPLIANCE_KEYWORDS)
 
 
 def _contains_akatronik_big_appliance(name: Any) -> bool:
@@ -514,6 +579,13 @@ def _contains_akatronik_big_appliance(name: Any) -> bool:
         r"lavadoras?",
         r"lavatrici?",
         r"wasmachines?",
+
+        # --- Dryers & Drying Machines ---
+        r"dryers?",
+        r"asciugatrici?",
+        r"secadoras?",
+        r"trocknmaschinen?",
+        r"seche[-\s]*linge",
 
         # --- Dishwashers ---
         # Catches: dishwasher, diswasher, dichwasher
@@ -547,6 +619,26 @@ def _contains_akatronik_big_appliance(name: Any) -> bool:
         r"frigo",
         r"congeladores?",
         r"congelateurs?",
+
+        # --- Ovens, Cookers, Hobs & Stoves ---
+        r"ovens?",
+        r"backofen",
+        r"cookers?",
+        r"hobs?",
+        r"kochfelds?",
+        r"stoves?",
+        r"herds?",
+        r"horno(?:s)?",
+        r"fourneaux?",
+        r"forno(?:s)?",
+
+        # --- Television ---
+        r"tvs?",
+        r"televisions?",
+        r"televisors?",
+        r"fernseher",
+        r"fernsehgerate",
+        r"televisores?",
 
         # --- Air Conditioners ---
         # Catches: air conditioner, air conditoner
@@ -675,9 +767,9 @@ def _apply_supplier_guardrail_filters(processed_data: list[list[Any]]) -> list[l
         supplier = str(row[supplier_idx] or "").strip().lower()
         name = row[name_idx]
 
-        # AKATRONIK: Only allowed brands + exclude multilingual big items via regex.
+        # AKATRONIK: Exclude disallowed brands + exclude multilingual big items via regex.
         if supplier in {"akatronik", "akatronic"}:
-            if not _contains_allowed_akatronik_brand(name):
+            if _contains_disallowed_akatronik_brand(name):
                 continue
             if _contains_akatronik_big_appliance(name):
                 continue
@@ -788,7 +880,7 @@ def format_prompt(
     supplier_rules = ""
     supplier_key = supplier_name.lower().strip()
     if supplier_key in {"akatronik", "akatronic"}:
-        supplier_rules = "   - STRICT AKATRONIK FILTER: (1) You MUST ONLY KEEP items where the Name contains one of these exact brands (ignoring case): AEG, BEKO, BOSCH, De'Longhi, ELECTROLUX, Gorenje, Hisense, LG, SAMSUNG, Siemens. (2) EXCLUDE big appliances using multilingual, accent-insensitive regex-style matching for words like washing machine, washmachine, waschmaschine, wasmachine, lavadora, lavatrice, machine a laver, maquina de lavar, dryer, secadora, dishwasher, lavavajillas, lave vaisselle, refrigerator, frigorifero, fridge, freezer, oven, TV, television, televisor, fernseher, air conditioner, climatiseur, klimaanlage. (3) Do NOT apply any 100 EUR total-price filter for AKATRONIK. Otherwise, filter out the entire row."
+        supplier_rules = "   - STRICT AKATRONIK FILTER: (1) EXCLUDE items where the Name contains any of these brands (ignoring case): AEG, BEKO, BOSCH, De'Longhi, ELECTROLUX, Gorenje, Hisense, LG, SAMSUNG, Siemens. (2) EXCLUDE big appliances using multilingual, accent-insensitive regex-style matching for words like washing machine, washmachine, waschmaschine, wasmachine, lavadora, lavatrice, machine a laver, maquina de lavar, dryer, secadora, dishwasher, lavavajillas, lave vaisselle, refrigerator, frigorifero, fridge, freezer, oven, TV, television, televisor, fernseher, air conditioner, climatiseur, klimaanlage. (3) Do NOT apply any 100 EUR total-price filter for AKATRONIK."
     elif supplier_key == "cennik":
         supplier_rules = "   - STRICT CENNIK FILTER: You MUST ONLY KEEP items where the Name contains 'MAKITA' brand (ignoring case and spelling variations). Exclude all other brands without exception. This is a MAKITA-only supplier."
     elif supplier_key == "duna":
