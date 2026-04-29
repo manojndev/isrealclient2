@@ -6,6 +6,7 @@ import os
 import random
 import re
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,7 @@ Standard Processing Guidelines:
    - Price is < 2.50 or invalid.
     - Total stock value (Price * Quantity) is < 100 EUR.
    - Strict- Row represents incoming stock, delivery dates, or estimated dates , Availability (e.g., "incoming 23.03"). Only keep ready/available stock it can be at any column with any header smartly it has to find and not add if not in stock only in stock has to be added.
+    - Refurbished / renewed / reconditioned / remanufactured items must be excluded when these words appear in the product name or description.
 {supplier_specific_rules}
 4. Calculations: Calculate "Total Price" = (Price * Quantity).
 5. Minimum Order Quantity (MOQ): If a minimum order quantity is specified in the list, extract it to a separate column.
@@ -68,13 +70,13 @@ DEFAULT_MODEL_NAME = "gemini-3-pro"
 
 # Cookie values for authentication
 Secure_1PSID = "g.a0009AjBI9hSRdlgkzMwaBFwfFO6IRDz7luAOtDwA9ukyvCaGGtJ-QuMcNlLj0XEkU_iAutgRQACgYKAXMSARMSFQHGX2MihMTN1gZhGq2mmGmUreStzxoVAUF8yKoh9C953oCF0ljkS01l1pMx0076"
-Secure_1PSIDTS = "sidts-CjEBhkeRd-RB4ow0iqw5hTYn4F39jc898OhdpyhdjbenS2R_TO6xKLi5yCNZpGkhFGfoEAA"
+Secure_1PSIDTS = "sidts-CjEBhkeRd5yi_3O-Pmd44vBLTfPTeUN0inmJ1y2rAoFYnxezXAVZyqLFTzRsDtTge4FREAA"
 
 if set_log_level is not None:
     set_log_level("INFO")
 
-DEFAULT_MIN_DELAY_SECONDS = 12.0
-DEFAULT_MAX_DELAY_SECONDS = 25.0
+DEFAULT_MIN_DELAY_SECONDS = 15.0
+DEFAULT_MAX_DELAY_SECONDS = 30.0
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
 DEFAULT_GENERATION_ATTEMPTS = 3
@@ -113,6 +115,13 @@ BIG_APPLIANCE_KEYWORDS = [
     "television",
     "air conditioner",
     "ac unit",
+]
+
+REFURBISHED_KEYWORDS = [
+    r"\brefurb(?:ished|ish)?\b",
+    r"\brenewed\b",
+    r"\breconditioned\b",
+    r"\bremanufactured\b",
 ]
 
 
@@ -395,6 +404,15 @@ def _normalize_brand_text(text: Any) -> str:
     return re.sub(r"[^A-Z0-9 ]+", " ", value)
 
 
+def _normalize_keyword_text(text: Any) -> str:
+    if text is None:
+        return ""
+    value = unicodedata.normalize("NFKD", str(text))
+    value = value.encode("ascii", "ignore").decode("ascii")
+    value = value.lower().replace("'", "")
+    return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+
 def _extract_price_from_product_name(name: Any) -> float | None:
     """Smart extraction of price from product name using regex patterns.
     Detects patterns like: €100, 99.99, $50, 100EUR, etc."""
@@ -441,6 +459,15 @@ def _is_big_appliance_regex(name: Any) -> bool:
     return False
 
 
+def _contains_refurbished_term(name: Any) -> bool:
+    if name is None:
+        return False
+    text = str(name).strip().lower()
+    if not text:
+        return False
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in REFURBISHED_KEYWORDS)
+
+
 def _contains_allowed_akatronik_brand(name: Any) -> bool:
     normalized = f" {_normalize_brand_text(name)} "
     return any(f" {brand} " in normalized for brand in AKATRONIK_ALLOWED_BRANDS)
@@ -457,6 +484,185 @@ def _contains_big_appliance_keyword(name: Any) -> bool:
     if not normalized:
         return False
     return any(keyword in normalized for keyword in BIG_APPLIANCE_KEYWORDS)
+
+
+def _contains_akatronik_big_appliance(name: Any) -> bool:
+    if name is None:
+        return False
+
+    raw_text = str(name).strip()
+    if not raw_text:
+        return False
+
+    normalized = _normalize_keyword_text(raw_text)
+    compact = normalized.replace(" ", "")
+
+    phrase_patterns = [
+        r"\bwashing\s*machine\b",
+        r"\bwashing\s*machines\b",
+        r"\bwash\s*machine\b",
+        r"\bwash\s*machines\b",
+        r"\bwaschmaschinen\b",
+        r"\bmachine\s*a\s*laver\b",
+        r"\blave[-\s]*linge\b",
+        r"\bmaquina\s*de\s*lavar\b",
+        r"\bmaquina\s*de\s*lavar\s*ropa\b",
+        r"\blavadora\b",
+        r"\blavadoras\b",
+        r"\blavatrice\b",
+        r"\blavatrici\b",
+        r"\bwaschmaschine\b",
+        r"\bspu(?:l|\u0308l)?maschine\b",
+        r"\bgeschirrspuler\b",
+        r"\bkuhlschrank\b",
+        r"\bwasmachine\b",
+        r"\bwasmachines\b",
+        r"\bwasher\b",
+        r"\bwashers\b",
+        r"\bdryer\b",
+        r"\bdryers\b",
+        r"\basciugatrice\b",
+        r"\basciugatrici\b",
+        r"\bsecadora\b",
+        r"\bsecadoras\b",
+        r"\bdish\s*washer\b",
+        r"\bdish\s*washers\b",
+        r"\bdishwasher\b",
+        r"\bdishwashers\b",
+        r"\blavavajillas\b",
+        r"\blave\s*vaisselle\b",
+        r"\bfridge\b",
+        r"\bfridges\b",
+        r"\brefrigerator\b",
+        r"\brefrigerators\b",
+        r"\brefrigirator\b",
+        r"\brefridgerator\b",
+        r"\brefrigerador\b",
+        r"\brefrigeradores\b",
+        r"\bfrigorifero\b",
+        r"\bfrigoriferi\b",
+        r"\bfrigorifico\b",
+        r"\bfrigo\b",
+        r"\bfreezer\b",
+        r"\bfreezers\b",
+        r"\bcongelador\b",
+        r"\bcongeladores\b",
+        r"\bcongelateur\b",
+        r"\bcongelateurs\b",
+        r"\b(oven|cooker|hob|stove)\b",
+        r"\bhorno\b",
+        r"\bhornos\b",
+        r"\bfour\b",
+        r"\bfours\b",
+        r"\bforno\b",
+        r"\bfornos\b",
+        r"\btv\b",
+        r"\btvs\b",
+        r"\btelevision\b",
+        r"\btelevisions\b",
+        r"\btelevisor\b",
+        r"\btelevisores\b",
+        r"\bfernseher\b",
+        r"\bfernsehgerate\b",
+        r"\bair\s*conditioner\b",
+        r"\bair\s*conditioners\b",
+        r"\bac\s*unit\b",
+        r"\bac\s*units\b",
+        r"\bklimaanlage\b",
+        r"\bklimaanlagen\b",
+        r"\bclimatiseur\b",
+        r"\bclimatiseurs\b",
+        # German Washers & Dryers
+        r"\bwaschtrockner\b",
+        r"\bwa(?:r|\u0308r)?mepumpentrockner\b",
+        r"\btrockner\b",
+
+        # German Refrigeration (Freezers, Combos, Side-by-Side)
+        r"\bku(?:h|\u0308h)?l[- ]?gefrierkombination\b",
+        r"\bgefrierschrank\b",
+        r"\bgefriertruhe\b",
+        r"\bside[- ]?by[- ]?side\b",
+        r"\bmultidoor\b",
+
+        # German Dishwasher (adding umlaut support, existing only has geschirrspuler)
+        r"\bgeschirrspu(?:l|\u0308l)?er\b",
+
+        # German Ovens, Stoves, Hobs & Hoods
+        r"\bbackofen\b",
+        r"\beinbaubackofen\b",
+        r"\bdampfbackofen\b",
+        r"\bherd\b",
+        r"\bherdset\b",
+        r"\beinbauherd\b",
+        r"\bkochfeld\b",
+        r"\binduktionskochfeld\b",
+        r"\bgaskochfeld\b",
+        r"\bglaskeramikkochfeld\b",
+        r"\bdunstabzugshaube\b",
+        r"\bdunstabzug\b",
+        r"\bflachschirmhaube\b",
+
+        # Other large electronics from your list
+        r"\bmikrowelle\b",
+        r"\beinbaumikrowelle\b",
+        r"\bsoundbar\b",
+        r"\bmonitor\b",
+        r"\bgaming[- ]?monitor\b"
+    ]
+
+    if any(re.search(pattern, normalized, re.IGNORECASE) for pattern in phrase_patterns):
+        return True
+
+    compact_hits = [
+        "washingmachine",
+        "washingmachines",
+        "washmachine",
+        "washmachines",
+        "lavadora",
+        "lavadoras",
+        "lavatrice",
+        "lavatrici",
+        "waschmaschine",
+        "waschmaschinen",
+        "wasmachine",
+        "wasmachines",
+        "machinealaver",
+        "lavelinge",
+        "maquinadelavar",
+        "dishwasher",
+        "dishwashers",
+        "lavavajillas",
+        "lavevaisselle",
+        "lavagevaisselle",
+        "refrigerator",
+        "refrigerators",
+        "refrigirator",
+        "refridgerator",
+        "refrigerador",
+        "refrigeradores",
+        "frigorifero",
+        "frigoriferi",
+        "frigorifico",
+        "freezer",
+        "freezers",
+        "congelador",
+        "congeladores",
+        "congelateur",
+        "congelateurs",
+        "airconditioner",
+        "airconditioners",
+        "acunit",
+        "acunits",
+        "television",
+        "televisions",
+        "televisor",
+        "televisores",
+        "fernseher",
+        "klimaanlage",
+        
+        
+    ]
+    return any(token in compact for token in compact_hits)
 
 
 def _enforce_price_rounding(processed_data: list[list[Any]]) -> list[list[Any]]:
@@ -523,21 +729,16 @@ def _apply_supplier_guardrail_filters(processed_data: list[list[Any]]) -> list[l
         supplier = str(row[supplier_idx] or "").strip().lower()
         name = row[name_idx]
 
-        # AKATRONIK: Only allowed brands + filter by total price > 100 EUR
-        # NOTE: Removed TV/washing-machine exclusion per user request.
+        # AKATRONIK: Only allowed brands + exclude multilingual big items via regex.
         if supplier in {"akatronik", "akatronic"}:
             if not _contains_allowed_akatronik_brand(name):
                 continue
-            # Filter out items with total price > 100 EUR (keep only <= 100 EUR)
-            if price_idx is not None and qty_idx is not None and max(price_idx, qty_idx) < len(row):
-                try:
-                    price = float(row[price_idx])
-                    qty = float(row[qty_idx])
-                    total_price = price * qty
-                    if total_price > 100:
-                        continue  # Skip expensive items (> 100 EUR)
-                except (TypeError, ValueError):
-                    pass  # If conversion fails, keep the row
+            if _contains_akatronik_big_appliance(name):
+                continue
+
+        # Global: exclude refurbished items for every supplier.
+        if _contains_refurbished_term(name):
+            continue
 
         # CENNIK: ONLY MAKITA brand allowed
         elif supplier == "cennik":
@@ -641,7 +842,7 @@ def format_prompt(
     supplier_rules = ""
     supplier_key = supplier_name.lower().strip()
     if supplier_key in {"akatronik", "akatronic"}:
-        supplier_rules = "   - STRICT AKATRONIK FILTER: (1) You MUST ONLY KEEP items where the Name contains one of these exact brands (ignoring case): AEG, BEKO, BOSCH, De'Longhi, ELECTROLUX, Gorenje, Hisense, LG, SAMSUNG, Siemens. (2) EXCLUDE obvious large appliances (washing machines, TVs, dishwashers, refrigerators, etc.). (3) EXCLUDE items where Total Price (Price × Quantity) is GREATER THAN 100 EUR. Otherwise, filter out the entire row."
+        supplier_rules = "   - STRICT AKATRONIK FILTER: (1) You MUST ONLY KEEP items where the Name contains one of these exact brands (ignoring case): AEG, BEKO, BOSCH, De'Longhi, ELECTROLUX, Gorenje, Hisense, LG, SAMSUNG, Siemens. (2) EXCLUDE big appliances using multilingual, accent-insensitive regex-style matching for words like washing machine, washmachine, waschmaschine, wasmachine, lavadora, lavatrice, machine a laver, maquina de lavar, dryer, secadora, dishwasher, lavavajillas, lave vaisselle, refrigerator, frigorifero, fridge, freezer, oven, TV, television, televisor, fernseher, air conditioner, climatiseur, klimaanlage. (3) Do NOT apply any 100 EUR total-price filter for AKATRONIK. Otherwise, filter out the entire row."
     elif supplier_key == "cennik":
         supplier_rules = "   - STRICT CENNIK FILTER: You MUST ONLY KEEP items where the Name contains 'MAKITA' brand (ignoring case and spelling variations). Exclude all other brands without exception. This is a MAKITA-only supplier."
     elif supplier_key == "duna":
