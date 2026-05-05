@@ -1,101 +1,152 @@
 import re
+from typing import Any
 
-def process_data(rows):
+def process_data(rows: list[list[Any]]) -> list[list[Any]]:
     if not rows:
         return []
 
-    # 1. Identify MOQ from header text (Rows 0-10)
-    moq_value = None
-    for row in rows[:11]:
-        text = " ".join([str(cell) for cell in row if cell])
-        moq_match = re.search(r'MOQ\s*(?:of)?\s*(\d+)', text, re.IGNORECASE)
-        if moq_match:
-            moq_value = int(moq_match.group(1))
+    def clean_str(val: Any) -> str:
+        if val is None:
+            return ""
+        return str(val).strip()
+
+    # Find the header row dynamically
+    header_idx = -1
+    for i, row in enumerate(rows):
+        if not row:
+            continue
+        row_str = " ".join([clean_str(x).lower() for x in row])
+        if "ean" in row_str and ("price" in row_str or "preis" in row_str) and ("model" in row_str or "name" in row_str or "desc" in row_str):
+            header_idx = i
             break
 
-    # 2. Find Header Row and Map Columns
-    header_idx = -1
-    col_map = {}
-    
-    for i, row in enumerate(rows):
-        row_str = [str(c).lower() if c is not None else "" for c in row]
-        if 'ean' in row_str or 'sell price' in row_str or 'models' in row_str:
-            header_idx = i
-            for j, val in enumerate(row_str):
-                if 'ean' in val: col_map['ean'] = j
-                elif 'model' in val or 'name' in val: col_map['name'] = j
-                elif 'price' in val: col_map['price'] = j
-                elif 'ready stock' in val: col_map['stock'] = j
-            break
-            
     if header_idx == -1:
         return []
 
-    # 3. Process Data Rows
-    output_header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
-    if moq_value is not None:
-        output_header.append("Min Qty")
+    headers = [clean_str(x).lower() for x in rows[header_idx]]
     
-    processed_rows = [output_header]
+    brand_idx, name_idx, ean_idx, stock_idx, price_idx, moq_idx = -1, -1, -1, -1, -1, -1
     
-    for row in rows[header_idx + 1:]:
-        # Skip empty rows or rows that don't have enough columns
-        if not row or len(row) <= max(col_map.values(), default=0):
+    for i, h in enumerate(headers):
+        if not h:
             continue
+        if any(kw in h for kw in ['brand', 'marke', 'hersteller', 'manufacturer']):
+            if brand_idx == -1: brand_idx = i
+        elif any(kw in h for kw in ['model', 'name', 'desc', 'artikel', 'product', 'item', 'title']):
+            if name_idx == -1: name_idx = i
+        elif any(kw in h for kw in ['ean', 'barcode', 'gtin']):
+            if ean_idx == -1: ean_idx = i
+        elif any(kw in h for kw in ['ready stock', 'qty', 'quantity', 'menge', 'bestand']):
+            if stock_idx == -1: stock_idx = i
+        elif any(kw in h for kw in ['stock']) and stock_idx == -1:
+            if 'incoming' not in h: # ensure we don't pick 'incoming stock' over a normal stock column
+                stock_idx = i
+        elif any(kw in h for kw in ['price', 'preis', 'cost', 'sell']):
+            if price_idx == -1: price_idx = i
+        elif any(kw in h for kw in ['moq', 'min', 'minimum']):
+            if moq_idx == -1: moq_idx = i
+
+    # Fallbacks based on typical placement if exact keywords are missed
+    if ean_idx == -1:
+        ean_idx = 2
+    if stock_idx == -1:
+        stock_idx = 3
+    if price_idx == -1:
+        price_idx = 1
+    if name_idx == -1:
+        name_idx = 0
+
+    # Prepare output format
+    out_headers = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
+    if moq_idx != -1:
+        out_headers.append("Min Qty")
+        
+    output_data = [out_headers]
+
+    # Pre-compile regex patterns for filtering
+    incoming_pattern = re.compile(r'(?i)(incoming\s*\d+|delivery\s*\d+|expected|estimated|transit|available\s*(from|ab)|verfügbar\s*ab|lieferdatum|ankunft|restock|backorder|out of stock)')
+    refurb_scooter_pattern = re.compile(r'(?i)(refurbished|renewed|reconditioned|remanufactured|scooter)')
+
+    # Process data rows
+    for row in rows[header_idx + 1:]:
+        if not row or all(cell is None or clean_str(cell) == "" for cell in row):
+            continue
+
+        # Check for incoming/delivery terms across text cells
+        skip_row = False
+        for cell in row:
+            val = clean_str(cell)
+            # Only test non-numeric/longer text strings to avoid false positives on pure numbers
+            if len(re.sub(r'[\d\.,]', '', val)) > 2:
+                if incoming_pattern.search(val):
+                    skip_row = True
+                    break
+        if skip_row:
+            continue
+
+        raw_brand = clean_str(row[brand_idx]) if brand_idx != -1 and brand_idx < len(row) else ""
+        raw_name = clean_str(row[name_idx]) if name_idx != -1 and name_idx < len(row) else ""
+        raw_ean = clean_str(row[ean_idx]) if ean_idx != -1 and ean_idx < len(row) else ""
+        raw_stock = clean_str(row[stock_idx]) if stock_idx != -1 and stock_idx < len(row) else ""
+        raw_price = clean_str(row[price_idx]) if price_idx != -1 and price_idx < len(row) else ""
+
+        # Process EAN
+        ean = re.sub(r'\D', '', raw_ean)
+        if not ean:
+            continue
+        if len(ean) > 13:
+            ean = ean[-13:]
+        ean = ean.zfill(13)
+
+        # Process Name
+        if raw_brand and raw_brand.lower() not in raw_name.lower():
+            full_name = f"{raw_brand} {raw_name}".strip()
+        else:
+            full_name = raw_name
+
+        if not full_name or refurb_scooter_pattern.search(full_name):
+            continue
+
+        # Process Price
+        price_str = re.sub(r'[^\d,\.-]', '', raw_price)
+        if ',' in price_str and '.' in price_str:
+            price_str = price_str.replace(',', '')
+        elif ',' in price_str:
+            price_str = price_str.replace(',', '.')
             
         try:
-            # Extract Raw Values
-            raw_ean = str(row[col_map['ean']]) if 'ean' in col_map else ""
-            raw_name = str(row[col_map['name']]) if 'name' in col_map else ""
-            raw_price = str(row[col_map['price']]) if 'price' in col_map else ""
-            raw_stock = row[col_map['stock']] if 'stock' in col_map else 0
-
-            # Data Cleaning - EAN
-            ean_clean = re.sub(r'\D', '', raw_ean)
-            if ean_clean:
-                ean_clean = ean_clean.zfill(13)
-            else:
-                continue
-
-            # Data Cleaning - Price
-            price_clean = str(raw_price).replace(',', '.')
-            price_match = re.search(r'(\d+\.?\d*)', price_clean)
-            if not price_match:
-                continue
-            price_val = float(price_match.group(1))
-
-            # Data Cleaning - Quantity
-            if isinstance(raw_stock, (int, float)):
-                stock_val = int(raw_stock)
-            else:
-                stock_match = re.search(r'(\d+)', str(raw_stock))
-                stock_val = int(stock_match.group(1)) if stock_match else 0
-
-            # Filtering Rules
-            if stock_val <= 4:
-                continue
-            if price_val < 2.50:
-                continue
-            
-            total_price = round(price_val * stock_val, 2)
-            if total_price < 100:
-                continue
-
-            # Final Row Assembly
-            final_row = [
-                ean_clean,
-                raw_name.strip(),
-                price_val,
-                stock_val,
-                total_price,
-                "smtr"
-            ]
-            if moq_value is not None:
-                final_row.append(moq_value)
-                
-            processed_rows.append(final_row)
-            
-        except (ValueError, TypeError, IndexError):
+            price = float(price_str)
+        except ValueError:
             continue
 
-    return processed_rows
+        if price < 2.50:
+            continue
+
+        # Process Stock
+        stock_str = re.sub(r'[^\d\-]', '', raw_stock)
+        try:
+            stock = int(stock_str)
+        except ValueError:
+            continue
+
+        if stock <= 4:
+            continue
+
+        # Process Total Value
+        total_price = round(price * stock, 2)
+        if total_price < 100.0:
+            continue
+
+        # Assemble Output Row
+        out_row = [ean, full_name, price, stock, total_price, "smtr"]
+        
+        # Process MOQ if present
+        if moq_idx != -1 and moq_idx < len(row):
+            raw_moq = clean_str(row[moq_idx])
+            moq_match = re.search(r'(\d+)', raw_moq)
+            moq = int(moq_match.group(1)) if moq_match else 1
+            out_row.append(moq)
+
+        output_data.append(out_row)
+
+    return output_data

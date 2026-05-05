@@ -52,6 +52,7 @@ Standard Processing Guidelines:
     - Total stock value (Price * Quantity) is < 100 EUR.
    - Strict- Row represents incoming stock, delivery dates, or estimated dates , Availability (e.g., "incoming 23.03"). Only keep ready/available stock it can be at any column with any header smartly it has to find and not add if not in stock only in stock has to be added.
     - Refurbished / renewed / reconditioned / remanufactured items must be excluded when these words appear in the product name or description.
+    - Any item with "scooter" in the product name or description must be excluded using regex matching.
 {supplier_specific_rules}
 4. Calculations: Calculate "Total Price" = (Price * Quantity).
 5. Minimum Order Quantity (MOQ): If a minimum order quantity is specified in the list, extract it to a separate column.
@@ -70,7 +71,7 @@ DEFAULT_MODEL_NAME = "gemini-3-pro"
 
 # Cookie values for authentication
 Secure_1PSID = "g.a0009AjBI9hSRdlgkzMwaBFwfFO6IRDz7luAOtDwA9ukyvCaGGtJ-QuMcNlLj0XEkU_iAutgRQACgYKAXMSARMSFQHGX2MihMTN1gZhGq2mmGmUreStzxoVAUF8yKoh9C953oCF0ljkS01l1pMx0076"
-Secure_1PSIDTS = "sidts-CjEBhkeRd5yi_3O-Pmd44vBLTfPTeUN0inmJ1y2rAoFYnxezXAVZyqLFTzRsDtTge4FREAA"
+Secure_1PSIDTS = "sidts-CjEBhkeRd8c8fIz4lkOslBE8nKaw2C0J0MUKip3VbGO3MrzhUdgz-cmUBFMBzafXqHPZEAA"
 
 if set_log_level is not None:
     set_log_level("INFO")

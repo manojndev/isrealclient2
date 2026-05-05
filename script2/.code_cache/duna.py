@@ -1,126 +1,139 @@
 import re
+from typing import Any
 
-def process_data(rows: list[list]) -> list[list]:
+def process_data(rows: list[list[Any]]) -> list[list[Any]]:
     if not rows:
         return []
 
-    # Find the header row by looking for key columns
+    def clean_str(val: Any) -> str:
+        if val is None:
+            return ""
+        return str(val).strip()
+
+    # Locate the actual header row
     header_idx = -1
-    col_map = {}
-    
     for i, row in enumerate(rows):
         if not row:
             continue
-        row_lower = [str(c).lower().strip() if c is not None else "" for c in row]
-        if any("ean" in c for c in row_lower) and any("price" in c for c in row_lower):
+        row_lower = [clean_str(x).lower() for x in row]
+        if any('ean' in x for x in row_lower) and any('price' in x or 'preis' in x for x in row_lower):
             header_idx = i
-            for j, cell in enumerate(row_lower):
-                if "ean" in cell:
-                    col_map['ean'] = j
-                elif "price" in cell:
-                    col_map['price'] = j
-                elif "qty" in cell or "quantity" in cell:
-                    col_map['qty'] = j
-                elif "manufacturer" in cell or "brand" in cell:
-                    col_map['brand'] = j
-                elif "item" in cell or "description" in cell or "name" in cell:
-                    col_map['name'] = j
-                elif "stock" in cell or "availability" in cell:
-                    col_map['stock'] = j
             break
 
-    if header_idx == -1 or 'ean' not in col_map or 'price' not in col_map:
+    if header_idx == -1:
         return []
 
-    final_rows = [["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]]
+    headers = [clean_str(x).lower() for x in rows[header_idx]]
     
-    appliance_keywords = [
-        'washing machine', 'dryer', 'dishwasher', 'refrigerator', 
-        'freezer', 'oven', 'hob', 'cooker', 'stove'
-    ]
-    incoming_keywords = ['incoming', 'delivery', 'estimated', 'expected']
+    brand_idx, name_idx, ean_idx, stock_idx, price_idx, moq_idx = -1, -1, -1, -1, -1, -1
+    
+    for i, h in enumerate(headers):
+        if not h:
+            continue
+        if any(kw in h for kw in ['brand', 'marke', 'hersteller', 'manufacturer']):
+            if brand_idx == -1: brand_idx = i
+        elif any(kw in h for kw in ['item', 'name', 'desc', 'artikel', 'product', 'title']):
+            if name_idx == -1: name_idx = i
+        elif any(kw in h for kw in ['ean', 'barcode', 'gtin']):
+            if ean_idx == -1: ean_idx = i
+        elif any(kw in h for kw in ['qty', 'quantity', 'menge', 'bestand']):
+            if stock_idx == -1: stock_idx = i
+        elif any(kw in h for kw in ['stock']): # Fallback
+            if stock_idx == -1: stock_idx = i
+        elif any(kw in h for kw in ['price', 'preis', 'cost', '€', 'usd', 'eur']):
+            if price_idx == -1: price_idx = i
+        elif any(kw in h for kw in ['moq', 'min', 'minimum']):
+            if moq_idx == -1: moq_idx = i
+
+    # Output headers
+    out_headers = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
+    if moq_idx != -1:
+        out_headers.append("Min Qty")
+        
+    output_data = [out_headers]
+
+    # Pre-compile Regex Patterns
+    incoming_pattern = re.compile(r'(?i)(incoming|delivery|expected|estimated|transit|available\s*(from|ab)|verfügbar\s*ab|lieferdatum|ankunft|restock|backorder|out of stock)')
+    refurb_scooter_pattern = re.compile(r'(?i)(refurbished|renewed|reconditioned|remanufactured|scooter)')
+    duna_appliance_pattern = re.compile(r'(?i)(washing\s*machine|dryer|dishwasher|refrigerator|freezer|oven|hob|cooker|stove)')
 
     for row in rows[header_idx + 1:]:
-        if not row or all(c is None for c in row):
+        if not row or all(cell is None or clean_str(cell) == "" for cell in row):
             continue
 
-        def get_val(key):
-            idx = col_map.get(key, -1)
-            if 0 <= idx < len(row) and row[idx] is not None:
-                return str(row[idx]).strip()
-            return ""
+        # Check for incoming stock / dates across all columns
+        skip_row = False
+        for cell in row:
+            if incoming_pattern.search(clean_str(cell)):
+                skip_row = True
+                break
+        if skip_row:
+            continue
 
-        ean_raw = get_val('ean')
-        price_raw = get_val('price')
-        qty_raw = get_val('qty')
-        brand_raw = get_val('brand')
-        name_raw = get_val('name')
-        stock_raw = get_val('stock')
+        # Extract Raw Values
+        raw_brand = clean_str(row[brand_idx]) if brand_idx != -1 and brand_idx < len(row) else ""
+        raw_name = clean_str(row[name_idx]) if name_idx != -1 and name_idx < len(row) else ""
+        raw_ean = clean_str(row[ean_idx]) if ean_idx != -1 and ean_idx < len(row) else ""
+        raw_stock = clean_str(row[stock_idx]) if stock_idx != -1 and stock_idx < len(row) else ""
+        raw_price = clean_str(row[price_idx]) if price_idx != -1 and price_idx < len(row) else ""
 
-        # Clean EAN
-        ean = re.sub(r'\D', '', ean_raw)
+        # Process EAN
+        ean = re.sub(r'\D', '', raw_ean)
         if not ean:
             continue
+        if len(ean) > 13:
+            ean = ean[-13:]
         ean = ean.zfill(13)
 
-        # Clean Name
-        name_parts = []
-        if brand_raw:
-            name_parts.append(brand_raw)
-        if name_raw:
-            name_parts.append(name_raw)
-        name = " ".join(name_parts).strip()
-        if not name:
+        # Process Name
+        if raw_brand and raw_brand.lower() not in raw_name.lower():
+            full_name = f"{raw_brand} {raw_name}".strip()
+        else:
+            full_name = raw_name
+
+        if refurb_scooter_pattern.search(full_name) or duna_appliance_pattern.search(full_name):
             continue
 
-        # Strict Duna Filter: Exclude large appliances
-        name_lower = name.lower()
-        if any(kw in name_lower for kw in appliance_keywords):
-            continue
-
-        # Clean Price
-        price_match = re.search(r'[\d\.]+', price_raw.replace(',', '.'))
-        if not price_match:
-            continue
+        # Process Price
+        price_str = re.sub(r'[^\d,\.-]', '', raw_price)
+        if ',' in price_str and '.' in price_str:
+            price_str = price_str.replace(',', '')
+        elif ',' in price_str:
+            price_str = price_str.replace(',', '.')
+            
         try:
-            price = float(price_match.group(0))
+            price = float(price_str)
         except ValueError:
             continue
 
-        # Clean Quantity
-        qty_match = re.search(r'\d+', qty_raw)
-        if not qty_match:
-            continue
-        try:
-            qty = int(qty_match.group(0))
-        except ValueError:
-            continue
-
-        # Stock / Availability check
-        row_str = " ".join([str(c).lower() for c in row if c is not None])
-        if any(kw in row_str for kw in incoming_keywords):
-            continue
-        
-        # If there's a specific stock column, ensure it signifies available stock
-        # and explicitly exclude dates indicating incoming stock (e.g. 23.03)
-        if 'stock' in col_map and stock_raw:
-            stock_lower = stock_raw.lower()
-            if re.search(r'\d{1,2}[\./-]\d{1,2}', stock_lower):
-                continue
-            if not any(kw in stock_lower for kw in ['ready', 'available', 'in stock', 'ok', 'yes', 'on stock']):
-                # Strict enforcement to only keep ready/available items if stock column is populated
-                continue
-
-        # Filtering conditions
-        if qty <= 4:
-            continue
         if price < 2.50:
             continue
-        
-        total_price = round(price * qty, 2)
-        if total_price < 100:
+
+        # Process Stock
+        stock_str = re.sub(r'[^\d\-]', '', raw_stock)
+        try:
+            stock = int(stock_str)
+        except ValueError:
             continue
 
-        final_rows.append([ean, name, price, qty, total_price, "duna"])
+        if stock <= 4:
+            continue
 
-    return final_rows
+        # Total Value Calculation
+        total_price = round(price * stock, 2)
+        if total_price < 100.0:
+            continue
+
+        # Assemble Output Row
+        out_row = [ean, full_name, price, stock, total_price, "duna"]
+        
+        # Process MOQ if present
+        if moq_idx != -1 and moq_idx < len(row):
+            raw_moq = clean_str(row[moq_idx])
+            moq_match = re.search(r'(\d+)', raw_moq)
+            moq = int(moq_match.group(1)) if moq_match else 1
+            out_row.append(moq)
+
+        output_data.append(out_row)
+
+    return output_data
