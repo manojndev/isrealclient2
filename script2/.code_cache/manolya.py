@@ -1,144 +1,98 @@
 import re
-from typing import Any
 
-def process_data(rows: list[list[Any]]) -> list[list[Any]]:
+def process_data(rows):
     if not rows:
         return []
+
+    # Final headers structure
+    output_headers = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
     
-    brand_idx = name_idx = ean_idx = price_idx = qty_idx = stock_idx = moq_idx = -1
-    header_found = False
+    # Identify indices
+    idx_brand = -1
+    idx_art = -1
+    idx_ean = -1
+    idx_stock = -1
+    idx_price = -1
+
+    # Attempt to find headers in the first few rows
+    for i, row in enumerate(rows[:5]):
+        row_str = [str(c).lower() if c is not None else "" for c in row]
+        if "ean" in row_str or "stock" in row_str or "price" in " ".join(row_str):
+            for j, val in enumerate(row_str):
+                if "brand" in val: idx_brand = j
+                elif "art" in val: idx_art = j
+                elif "ean" in val: idx_ean = j
+                elif "stock" in val: idx_stock = j
+                elif "price" in val: idx_price = j
+            data_start_idx = i + 1
+            break
+    else:
+        # Inference fallback based on sample data if no clear header row found
+        idx_brand, idx_art, idx_ean, idx_stock, idx_price = 0, 1, 2, 3, 4
+        data_start_idx = 0
+
+    processed_data = [output_headers]
     
-    output_rows = []
-    has_moq = False
-    
-    refurb_regex = re.compile(r"\b(refurbished|renewed|reconditioned|remanufactured)\b", re.IGNORECASE)
-    incoming_regex = re.compile(r"\b(incoming|eta|delivery|estimated|expected)\b", re.IGNORECASE)
-    
-    for i, row in enumerate(rows):
-        if not row or all(x is None or str(x).strip() == '' for x in row):
+    # Regex patterns
+    refurb_regex = re.compile(r'refurbished|renewed|reconditioned|remanufactured', re.IGNORECASE)
+    scooter_regex = re.compile(r'scooter', re.IGNORECASE)
+
+    for row in rows[data_start_idx:]:
+        # Skip empty rows
+        if not row or all(c is None for c in row):
             continue
             
-        str_row = [str(x).lower().strip() if x is not None else "" for x in row]
-        
-        # Header Detection
-        if not header_found:
-            if any('price' in x or 'preis' in x or '€' in x for x in str_row) or any('ean' in x for x in str_row) or any('stock' in x or 'bestand' in x for x in str_row):
-                header_found = True
-                for j, val in enumerate(str_row):
-                    if not val: continue
-                    if 'ean' in val or 'barcode' in val: ean_idx = j
-                    elif 'price' in val or 'preis' in val: price_idx = j
-                    elif 'stock' in val or 'qty' in val or 'quantity' in val or 'bestand' in val: qty_idx = j
-                    elif 'brand' in val or 'marke' in val or 'hersteller' in val or 'manufacturer' in val: brand_idx = j
-                    elif 'art' == val or 'item' in val or 'name' in val or 'description' in val or 'artikel' in val or 'modell' in val: name_idx = j
-                    elif 'min' in val and ('qty' in val or 'order' in val or 'moq' in val): moq_idx = j
-                if moq_idx != -1: has_moq = True
+        try:
+            # 1. Quantity Cleaning
+            raw_qty = str(row[idx_stock]) if idx_stock < len(row) and row[idx_stock] is not None else "0"
+            qty_clean = re.sub(r'[^\d]', '', raw_qty)
+            quantity = int(qty_clean) if qty_clean else 0
+            
+            # Rule: Quantity <= 4 invalid
+            if quantity <= 4:
                 continue
-                
-        r_qty, r_price, r_ean, r_brand, r_moq, r_name = None, None, None, None, None, None
-        
-        if header_found:
-            if 0 <= qty_idx < len(row): r_qty = row[qty_idx]
-            if 0 <= price_idx < len(row): r_price = row[price_idx]
-            if 0 <= ean_idx < len(row): r_ean = row[ean_idx]
-            if 0 <= brand_idx < len(row): r_brand = row[brand_idx]
-            if 0 <= name_idx < len(row): r_name = row[name_idx]
-            if 0 <= moq_idx < len(row): r_moq = row[moq_idx]
-        else:
-            # Fallback for dynamic pattern matching if explicit headers are somewhat missing
-            for val in row:
-                if val is None: continue
-                val_str = str(val).strip()
-                if not val_str: continue
-                
-                if re.match(r'^\d{12,14}$', val_str) and r_ean is None:
-                    r_ean = val_str
-                elif re.match(r'^\+?\d+$', val_str) and len(val_str) < 6 and r_qty is None:
-                    r_qty = val_str
-                elif re.match(r'^[\d\s.,]+[€$£]?$', val_str) and any(c.isdigit() for c in val_str) and len(val_str) < 15 and r_price is None and val_str != r_ean:
-                    r_price = val_str
-                elif len(val_str) > 3 and not re.match(r'^[\d.,]+$', val_str):
-                    if r_name is None: r_name = val_str
-                    elif r_brand is None: r_brand = r_name; r_name = val_str
-                    
-        # Extract and Clean Quantity
-        if r_qty is None: continue
-        qty_str = re.sub(r'[^\d]', '', str(r_qty))
-        if not qty_str: continue
-        try:
-            qty = int(qty_str)
-        except ValueError:
+
+            # 2. Price Cleaning
+            raw_price = str(row[idx_price]) if idx_price < len(row) and row[idx_price] is not None else "0"
+            price_clean = re.sub(r'[^\d,.]', '', raw_price).replace(',', '.')
+            price = float(price_clean) if price_clean else 0.0
+            
+            # Rule: Price < 2.50 invalid
+            if price < 2.50:
+                continue
+
+            # Rule: Total stock value < 100 EUR invalid
+            total_price = round(price * quantity, 2)
+            if total_price < 100:
+                continue
+
+            # 3. Name Construction
+            brand = str(row[idx_brand]).strip() if idx_brand < len(row) and row[idx_brand] else ""
+            art = str(row[idx_art]).strip() if idx_art < len(row) and row[idx_art] else ""
+            full_name = f"{brand} {art}".strip()
+            
+            # Rules: Filter Refurbished and Scooters
+            if refurb_regex.search(full_name) or scooter_regex.search(full_name):
+                continue
+
+            # 4. EAN Cleaning
+            raw_ean = str(row[idx_ean]) if idx_ean < len(row) and row[idx_ean] is not None else ""
+            ean_clean = re.sub(r'[^\d]', '', raw_ean)
+            if not ean_clean:
+                continue
+            ean = ean_clean.zfill(13)
+
+            # Construct final row
+            processed_data.append([
+                ean,
+                full_name,
+                price,
+                quantity,
+                total_price,
+                "manolya"
+            ])
+
+        except (ValueError, IndexError):
             continue
-        if qty <= 4: continue
-        
-        # Extract and Clean Price
-        if r_price is None: continue
-        price_str = str(r_price).replace('€', '').replace('$', '').replace('£', '').strip()
-        # Clean numeric format handling
-        if ',' in price_str and '.' in price_str:
-            if price_str.rfind(',') > price_str.rfind('.'):
-                price_str = price_str.replace('.', '').replace(',', '.')
-            else:
-                price_str = price_str.replace(',', '')
-        elif ',' in price_str:
-            price_str = price_str.replace(',', '.')
-            
-        price_str = re.sub(r'[^\d.]', '', price_str)
-        if not price_str: continue
-        try:
-            price = float(price_str)
-        except ValueError:
-            continue
-        if price < 2.50: continue
-        
-        # Total Price Filter
-        total_price = round(price * qty, 2)
-        if total_price < 100.0: continue
-        
-        # Extract and Clean EAN
-        if r_ean is None: continue
-        ean_str = re.sub(r'\D', '', str(r_ean))
-        if not ean_str: continue
-        ean = ean_str.zfill(13)
-        
-        # Extract Name
-        brand_val = str(r_brand).strip() if r_brand is not None else ""
-        name_val = str(r_name).strip() if r_name is not None else ""
-        
-        if brand_val and name_val:
-            if brand_val.lower() not in name_val.lower():
-                full_name = f"{brand_val} {name_val}".strip()
-            else:
-                full_name = name_val.strip()
-        else:
-            full_name = (name_val or brand_val).strip()
-            
-        full_name = re.sub(r'\s+', ' ', full_name)
-        if not full_name: continue
-        
-        # Filters (Regex & Combinations)
-        row_str_combined = " ".join([str(x) for x in row if x is not None])
-        if incoming_regex.search(row_str_combined): continue
-        if refurb_regex.search(full_name): continue
-        if re.search(r'\b(out of stock)\b', row_str_combined, re.IGNORECASE): continue
-        if re.search(r'\d{1,2}[./-]\d{1,2}', row_str_combined) and ('incoming' in row_str_combined.lower() or 'delivery' in row_str_combined.lower()): continue
-        
-        final_row = [ean, full_name, price, qty, total_price, "manolya"]
-        
-        # MOQ handling
-        if has_moq:
-            moq_val = 1
-            if r_moq is not None:
-                m_str = re.sub(r'\D', '', str(r_moq))
-                if m_str: moq_val = int(m_str)
-            final_row.append(moq_val)
-            
-        output_rows.append(final_row)
-        
-    headers = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
-    if has_moq:
-        headers.append("Min Qty")
-        
-    output_rows.insert(0, headers)
-    
-    return output_rows
+
+    return processed_data

@@ -71,7 +71,7 @@ DEFAULT_MODEL_NAME = "gemini-3-pro"
 
 # Cookie values for authentication
 Secure_1PSID = "g.a0009AjBI9hSRdlgkzMwaBFwfFO6IRDz7luAOtDwA9ukyvCaGGtJ-QuMcNlLj0XEkU_iAutgRQACgYKAXMSARMSFQHGX2MihMTN1gZhGq2mmGmUreStzxoVAUF8yKoh9C953oCF0ljkS01l1pMx0076"
-Secure_1PSIDTS = "sidts-CjEBhkeRd8c8fIz4lkOslBE8nKaw2C0J0MUKip3VbGO3MrzhUdgz-cmUBFMBzafXqHPZEAA"
+Secure_1PSIDTS = "sidts-CjEBhkeRd6qmx6FizY8XEaIQuXV2rYGoBE3e0n5am4vZezcPlN2tbhN4wDjRRL3En79TEAA"
 
 if set_log_level is not None:
     set_log_level("INFO")
