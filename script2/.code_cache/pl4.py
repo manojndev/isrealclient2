@@ -4,107 +4,106 @@ def process_data(rows):
     if not rows:
         return []
 
-    # 1. Identify Column Indices
-    # We look at the first few rows to determine which index corresponds to which data type
-    header_indices = {"ean": None, "brand": None, "art": None, "price": None, "stock": None}
-    
-    # Check first row for keywords
-    first_row = [str(c).lower() if c is not None else "" for c in rows[0]]
-    for i, val in enumerate(first_row):
-        if "ean" in val: header_indices["ean"] = i
-        elif "brand" in val: header_indices["brand"] = i
-        elif "art" in val or "product" in val: header_indices["art"] = i
-        elif "price" in val or "€" in val: header_indices["price"] = i
-        elif "stock" in val or "qty" in val or "menge" in val: header_indices["stock"] = i
+    def is_ean(val):
+        s = re.sub(r'\D', '', str(val))
+        return len(s) >= 8 and len(s) <= 14 
 
-    # Fallback/Validation logic for indices using sample data if header was messy
-    def infer_indices(data_rows):
-        inferred = {"ean": None, "brand": None, "art": None, "price": None, "stock": None}
-        for row in data_rows[:20]:
-            for i, cell in enumerate(row):
-                if cell is None: continue
-                s_cell = str(cell).strip()
-                # EAN check (13 digits)
-                if re.fullmatch(r'\d{12,14}', s_cell.replace('.0', '')):
-                    inferred["ean"] = i
-                # Price check (float with decimals)
-                elif re.match(r'^\d+[.,]\d{2}$', s_cell):
-                    inferred["price"] = i
-        return inferred
+    def clean_ean(val):
+        s = re.sub(r'\D', '', str(val))
+        return s.zfill(13)
 
-    inferred = infer_indices(rows)
-    for k, v in header_indices.items():
-        if v is None: header_indices[k] = inferred[k]
-
-    final_data = [["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]]
-    
-    # Keywords for exclusion
-    exclude_terms = ["refurbished", "renewed", "reconditioned", "remanufactured"]
-    scooter_regex = re.compile(r'scooter', re.IGNORECASE)
-
-    for idx, row in enumerate(rows):
-        # Skip header or empty rows
-        if not any(row) or idx == 0:
-            continue
-            
+    def clean_price(val):
+        if val is None: return None
+        s = str(val).replace('€', '').replace('$', '').strip()
         try:
-            # --- Extraction & Cleaning ---
+            return float(s.replace(',', '.'))
+        except ValueError:
+            return None
+
+    def clean_int(val):
+        if val is None: return None
+        s = re.sub(r'[^\d]', '', str(val))
+        try:
+            return int(s)
+        except ValueError:
+            return None
+
+    # Identify indices
+    header = rows[0]
+    sample_data = rows[1:10]
+    
+    idx_ean = idx_brand = idx_art = idx_stock = idx_price = -1
+    
+    # Try header matching first
+    for i, h in enumerate(header):
+        h_str = str(h or "").lower()
+        if "ean" in h_str: idx_ean = i
+        elif "brand" in h_str: idx_brand = i
+        elif "art" in h_str or "name" in h_str or "bezeichnung" in h_str: idx_art = i
+        elif "stock" in h_str or "menge" in h_str or "lager" in h_str or "qty" in h_str: idx_stock = i
+        elif "price" in h_str or "preis" in h_str: idx_price = i
+
+    # Fallback to inference if headers were generic
+    if idx_ean == -1:
+        for r in sample_data:
+            for i, col in enumerate(r):
+                if is_ean(col): idx_ean = i; break
+    
+    output_header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
+    processed_rows = [output_header]
+
+    exclude_patterns = re.compile(r'refurbished|renewed|reconditioned|remanufactured|scooter', re.IGNORECASE)
+    availability_patterns = re.compile(r'incoming|expected|delivery|availabl|soon', re.IGNORECASE)
+
+    for row in rows:
+        # Skip empty rows or header row
+        if not any(row) or row == header:
+            continue
             
-            # EAN
-            raw_ean = str(row[header_indices["ean"]]).split('.')[0] if header_indices["ean"] is not None else ""
-            ean = "".join(filter(str.isdigit, raw_ean))
-            if len(ean) < 13:
-                ean = ean.zfill(13)
-            elif len(ean) > 13:
-                ean = ean[-13:]
-            
-            # Name (Brand + Art)
-            brand = str(row[header_indices["brand"]] or "").strip()
-            art = str(row[header_indices["art"]] or "").strip()
-            full_name = f"{brand} {art}".strip()
-            
-            # Price
-            raw_price = str(row[header_indices["price"]] or "0")
-            clean_price = re.sub(r'[^\d.,]', '', raw_price).replace(',', '.')
-            price = float(clean_price)
-            
-            # Quantity
-            raw_qty = str(row[header_indices["stock"]] or "0")
-            # Filter out strings like "incoming"
-            if any(term in raw_qty.lower() for term in ["incoming", "delivery", "expected"]):
-                continue
-            qty_match = re.search(r'\d+', raw_qty)
-            qty = int(qty_match.group()) if qty_match else 0
-            
-            # --- Filtering ---
-            
-            # Price/Qty constraints
-            if qty <= 4 or price < 2.50:
-                continue
-            
-            # Total Stock Value
-            total_value = round(price * qty, 2)
-            if total_value < 100:
-                continue
-            
-            # Name based exclusions
-            name_lower = full_name.lower()
-            if any(term in name_lower for term in exclude_terms):
-                continue
-            if scooter_regex.search(name_lower):
-                continue
-            
-            # --- Final Row Construction ---
-            final_data.append([
-                ean,
-                full_name,
-                price,
-                qty,
-                total_value,
-                "pl4"
-            ])
-            
-        except (ValueError, IndexError, TypeError):
+        raw_ean = row[idx_ean] if idx_ean != -1 else None
+        if not is_ean(raw_ean):
             continue
 
-    return final_data
+        ean = clean_ean(raw_ean)
+        
+        # Name construction
+        brand = str(row[idx_brand] or "") if idx_brand != -1 else ""
+        art = str(row[idx_art] or "") if idx_art != -1 else ""
+        full_name = f"{brand} {art}".strip()
+        
+        # Filtering: Name-based
+        if exclude_patterns.search(full_name):
+            continue
+            
+        # Check all columns for availability/incoming status
+        is_incoming = False
+        for cell in row:
+            if cell and availability_patterns.search(str(cell)):
+                is_incoming = True
+                break
+        if is_incoming:
+            continue
+
+        price = clean_price(row[idx_price]) if idx_price != -1 else None
+        stock = clean_int(row[idx_stock]) if idx_stock != -1 else None
+
+        # Filtering: Logic-based
+        if price is None or stock is None:
+            continue
+        if price < 2.50 or stock <= 4:
+            continue
+            
+        total_price = round(price * stock, 2)
+        if total_price < 100:
+            continue
+
+        processed_rows.append([
+            ean,
+            full_name,
+            price,
+            stock,
+            total_price,
+            "pl4"
+        ])
+
+    return processed_rows

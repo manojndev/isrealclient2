@@ -4,89 +4,86 @@ def process_data(rows):
     if not rows:
         return []
 
-    # Final headers structure
-    header_row = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
-    
-    # Identify indices from Row 0
-    idx_map = {"qty": 0, "name": 1, "ean": 2, "price": 3}
-    
-    # Optional logic to detect if headers are different, 
-    # but based on sample they are consistently [QTY, article, EAN, price, '']
-    first_row = [str(c).lower() for c in rows[0]]
-    for i, col in enumerate(first_row):
-        if 'ean' in col: idx_map['ean'] = i
-        elif 'article' in col or 'description' in col: idx_map['name'] = i
-        elif 'price' in col: idx_map['price'] = i
-        elif 'qty' in col or 'quantity' in col: idx_map['qty'] = i
+    # Final headers
+    header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
+    processed_rows = [header]
 
-    # Regex patterns for filtering
-    refurb_pattern = re.compile(r'refurbished|renewed|reconditioned|remanufactured', re.IGNORECASE)
-    scooter_pattern = re.compile(r'scooter', re.IGNORECASE)
-    date_pattern = re.compile(r'\d{2}\.\d{2}') # matches dates like 23.03
+    # Mapping to store column indices
+    col_map = {"qty": -1, "name": -1, "ean": -1, "price": -1}
 
-    processed_data = [header_row]
+    # Attempt to find header row and map indices
+    start_row = 0
+    for i, row in enumerate(rows[:5]):
+        row_str = [str(cell).lower() if cell is not None else "" for cell in row]
+        if 'ean' in row_str or 'article' in row_str or 'price' in row_str:
+            for idx, val in enumerate(row_str):
+                if 'qty' in val or 'quant' in val: col_map["qty"] = idx
+                elif 'ean' in val or 'barcode' in val: col_map["ean"] = idx
+                elif 'price' in val or 'preis' in val: col_map["price"] = idx
+                elif 'article' in val or 'model' in val or 'name' in val: col_map["name"] = idx
+            start_row = i + 1
+            break
     
-    # Start from index 1 to skip header
-    for row in rows[1:]:
-        if not row or len(row) <= max(idx_map.values()):
+    # Fallback mapping based on sample structure if header not found
+    if col_map["ean"] == -1:
+        col_map = {"qty": 0, "name": 1, "ean": 2, "price": 3}
+        start_row = 1
+
+    exclude_regex = re.compile(r'scooter|refurbished|renewed|reconditioned|remanufactured', re.IGNORECASE)
+
+    for i in range(start_row, len(rows)):
+        row = rows[i]
+        if not row or len(row) <= max(col_map.values()):
             continue
-            
+
         try:
-            # --- Name & Basic Filters ---
-            name = str(row[idx_map['name']]).strip()
-            if not name:
-                continue
-            if refurb_pattern.search(name) or scooter_pattern.search(name):
-                continue
-            
-            # Check all columns for "incoming" or dates to satisfy availability rule
-            is_incoming = False
-            for cell in row:
-                cell_str = str(cell).lower()
-                if 'incoming' in cell_str or 'due' in cell_str or date_pattern.search(cell_str):
-                    is_incoming = True
-                    break
-            if is_incoming:
+            # 1. Clean Name and check exclusions
+            name = str(row[col_map["name"]]).strip()
+            if exclude_regex.search(name):
                 continue
 
-            # --- Price ---
-            raw_price = str(row[idx_map['price']])
-            # Extract digits and decimal point
-            price_str = "".join(re.findall(r'[0-9.]+', raw_price.replace(',', '.')))
-            price = float(price_str) if price_str else 0.0
+            # 2. Clean EAN (Strictly 13 digits)
+            ean_raw = re.sub(r'\D', '', str(row[col_map["ean"]]))
+            if not ean_raw:
+                continue
+            ean = ean_raw.zfill(13)[-13:]
+
+            # 3. Clean Price
+            price_raw = str(row[col_map["price"]])
+            price_clean = re.sub(r'[^\d.,]', '', price_raw).replace(',', '.')
+            price = float(price_clean)
             if price < 2.50:
                 continue
 
-            # --- Quantity ---
-            raw_qty = str(row[idx_map['qty']])
-            qty_str = "".join(re.findall(r'\d+', raw_qty.split('.')[0])) # handle 100.0
-            quantity = int(qty_str) if qty_str else 0
-            if quantity <= 4:
+            # 4. Clean Quantity
+            qty_raw = str(row[col_map["qty"]])
+            qty_clean = re.sub(r'[^\d.]', '', qty_raw)
+            qty = int(float(qty_clean)) if qty_clean else 0
+            if qty <= 4:
                 continue
 
-            # --- Total Value Calculation ---
-            total_price = round(price * quantity, 2)
+            # 5. Availability check (General logic for 'incoming' etc)
+            # Checking all cells in the row for availability keywords
+            row_text = " ".join([str(c).lower() for c in row if c])
+            if any(word in row_text for word in ["incoming", "delivery date", "estimated", "expected"]):
+                continue
+
+            # 6. Calculations
+            total_price = round(price * qty, 2)
             if total_price < 100:
                 continue
 
-            # --- EAN ---
-            raw_ean = str(row[idx_map['ean']])
-            ean_clean = "".join(re.findall(r'\d+', raw_ean))
-            if not ean_clean:
-                continue
-            ean = ean_clean.zfill(13)
-
-            # --- Build Final Row ---
-            processed_data.append([
+            # Output mapping
+            processed_rows.append([
                 ean,
                 name,
                 price,
-                quantity,
+                qty,
                 total_price,
                 "itrade"
             ])
-            
-        except (ValueError, IndexError):
+
+        except (ValueError, TypeError, IndexError):
             continue
 
-    return processed_data
+    return processed_rows

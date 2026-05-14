@@ -1,83 +1,96 @@
 import re
 
 def process_data(rows):
-    if not rows:
-        return [["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]]
+    header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier", "Min Qty"]
+    result = [header]
+    
+    # Global MOQ extraction from text
+    global_moq = None
+    for row in rows:
+        for cell in row:
+            if cell and isinstance(cell, str) and "MOQ of" in cell:
+                moq_match = re.search(r'MOQ of (\d+)', cell)
+                if moq_match:
+                    global_moq = int(moq_match.group(1))
+                    break
 
-    # 1. Column Identification
-    header_row = rows[0]
-    col_map = {"ean": -1, "name": -1, "price": -1, "qty": -1, "avail": -1}
+    col_map = {"name": -1, "price": -1, "ean": -1, "stock": -1}
+    data_start = -1
 
-    for i, cell in enumerate(header_row):
-        val = str(cell).lower()
-        if "ean" in val:
-            col_map["ean"] = i
-        elif "name" in val or "item" in val or "model" in val:
-            col_map["name"] = i
-        elif "price" in val or "cost" in val:
-            col_map["price"] = i
-        elif "qty" in val or "sell" in val or "stock" in val or "quantity" in val:
-            col_map["qty"] = i
-        elif "eta" in val or "avail" in val or "status" in val:
-            col_map["avail"] = i
+    # Identify Table Header
+    for i, row in enumerate(rows):
+        row_str = [str(c).upper() if c is not None else "" for c in row]
+        if "MODELS" in row_str or "SELL PRICE" in row_str:
+            for idx, val in enumerate(row_str):
+                if "MODEL" in val: col_map["name"] = idx
+                elif "PRICE" in val: col_map["price"] = idx
+                elif "EAN" in val: col_map["ean"] = idx
+                elif "STOCK" in val or "READY" in val: col_map["stock"] = idx
+            data_start = i + 1
+            break
 
-    # Fallback to pattern matching if headers are non-standard
-    if col_map["ean"] == -1:
-        for i, cell in enumerate(rows[1] if len(rows) > 1 else []):
-            s_val = re.sub(r'\D', '', str(cell))
-            if len(s_val) >= 11: col_map["ean"] = i
+    if data_start == -1 or col_map["ean"] == -1:
+        return [header]
 
-    final_header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
-    output = [final_header]
+    for i in range(data_start, len(rows)):
+        row = rows[i]
+        if not row or len(row) <= max(col_map.values()):
+            continue
 
-    for row in rows[1:]:
         try:
-            # Availability check (Strict)
-            if col_map["avail"] != -1:
-                avail_status = str(row[col_map["avail"]]).lower()
-                # Check for dates (e.g., 23.03) or "incoming"
-                if "ready" not in avail_status and "stock" not in avail_status:
-                    if re.search(r'\d{2}[./]\d{2}', avail_status) or "incoming" in avail_status:
-                        continue
-                if avail_status == "" or "out" in avail_status:
-                    continue
+            # Name extraction
+            name = str(row[col_map["name"]]).strip()
+            if not name or name.lower() == "none":
+                continue
+            
+            # Filtering: Refurbished and Scooter
+            name_lower = name.lower()
+            if any(x in name_lower for x in ["refurbished", "renewed", "reconditioned", "remanufactured"]):
+                continue
+            if re.search(r'scooter', name_lower):
+                continue
 
-            # Quantity Extraction
-            raw_qty = str(row[col_map["qty"]]) if col_map["qty"] != -1 else "0"
-            qty_clean = re.sub(r'[^\d]', '', raw_qty)
+            # Price extraction
+            raw_price = str(row[col_map["price"]])
+            price_clean = re.sub(r'[^\d.,]', '', raw_price).replace(',', '.')
+            price = float(price_clean) if price_clean else 0.0
+            
+            # EAN extraction
+            raw_ean = str(row[col_map["ean"]])
+            ean_clean = re.sub(r'\D', '', raw_ean)
+            ean = ean_clean.zfill(13) if ean_clean else ""
+
+            # Quantity extraction
+            raw_qty = str(row[col_map["stock"]])
+            qty_clean = re.sub(r'\D', '', raw_qty)
             qty = int(qty_clean) if qty_clean else 0
+
+            # Filtering logic
             if qty <= 4:
                 continue
-
-            # Price Extraction
-            raw_price = str(row[col_map["price"]]) if col_map["price"] != -1 else "0"
-            price_clean = raw_price.replace(',', '.').replace(' ', '')
-            price_match = re.search(r'(\d+\.?\d*)', price_clean)
-            if not price_match:
-                continue
-            price = float(price_match.group(1))
             if price < 2.50:
                 continue
-
-            # Total Stock Value calculation and filter
+            
             total_price = round(price * qty, 2)
-            if total_price < 100.0:
+            if total_price < 100:
+                continue
+            
+            # Availability Check (Ready Stock check)
+            # The sample shows 'Ready Stock' header; we only process if qty > 0 and no 'incoming' text
+            if "incoming" in str(row[col_map["stock"]]).lower():
                 continue
 
-            # EAN Extraction (13-digit string)
-            raw_ean = str(row[col_map["ean"]]) if col_map["ean"] != -1 else ""
-            ean_clean = re.sub(r'\D', '', raw_ean)
-            ean = ean_clean.zfill(13)
-
-            # Name Extraction
-            name = str(row[col_map["name"]]).strip() if col_map["name"] != -1 else ""
-
-            # Supplier name constant
-            supplier = "smalltronic"
-
-            output.append([ean, name, price, qty, total_price, supplier])
+            result.append([
+                ean,
+                name,
+                price,
+                qty,
+                total_price,
+                "smalltronic",
+                global_moq
+            ])
 
         except (ValueError, IndexError):
             continue
 
-    return output
+    return result

@@ -4,97 +4,97 @@ def process_data(rows):
     if not rows:
         return []
 
-    # Final headers
-    output_header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
+    final_header = ["EAN", "Name", "Price", "Stock/Quantity", "Total Price", "Supplier"]
+    processed_data = [final_header]
     
-    # 1. Column Identification
-    # Sample structure: 0:sum Available, 1:manufacturer, 2:article Type, 3:Type2, 4:barcode, 5:selling Price
+    # Identify indices
+    # Based on sample: 0: Qty, 1: Brand, 2: Name, 4: EAN, 5: Price
     idx_qty = 0
     idx_brand = 1
-    idx_desc = 2
-    idx_extra = 3
+    idx_name = 2
     idx_ean = 4
     idx_price = 5
 
-    # Regex for standard filters
-    refurb_regex = re.compile(r'refurbished|renewed|reconditioned|remanufactured', re.IGNORECASE)
-    scooter_regex = re.compile(r'scooter', re.IGNORECASE)
+    # Regex for big appliances (multilingual)
+    appliances_pattern = re.compile(
+        r"washing\s?machine|washmaschine|waschmaschine|wasmachine|lavadora|lavatrice|machine\s?a\s?laver|"
+        r"maquina\s?de\s?lavar|dryer|secadora|dishwasher|lavavajillas|lave\s?vaisselle|refrigerator|"
+        r"frigorifero|fridge|freezer|oven|tv|television|televisor|fernseher|air\s?conditioner|"
+        r"climatiseur|klimaanlage", 
+        re.IGNORECASE
+    )
     
-    # AKATRONIK Brand Filter
-    forbidden_brands = ['AEG', 'BEKO', 'BOSCH', "DE'LONGHI", 'ELECTROLUX', 'GORENJE', 'HISENSE', 'LG', 'SAMSUNG', 'SIEMENS']
-    
-    # AKATRONIK Appliance Filter (Multilingual / Accent Insensitive variations handled by basic strings)
-    appliances = [
-        'washing machine', 'washmachine', 'waschmaschine', 'wasmachine', 'lavadora', 'lavatrice', 
-        'machine a laver', 'maquina de lavar', 'dryer', 'secadora', 'dishwasher', 'lavavajillas', 
-        'lave vaisselle', 'refrigerator', 'frigorifero', 'fridge', 'freezer', 'oven', 'tv', 
-        'television', 'televisor', 'fernseher', 'air conditioner', 'climatiseur', 'klimaanlage'
-    ]
-    appliance_regex = re.compile('|'.join(appliances), re.IGNORECASE)
+    excluded_brands = {
+        "aeg", "beko", "bosch", "de'longhi", "electrolux", 
+        "gorenje", "hisense", "lg", "samsung", "siemens"
+    }
 
-    processed_data = [output_header]
+    refurbished_terms = ["refurbished", "renewed", "reconditioned", "remanufactured"]
 
-    # Skip header row
-    for row in rows[1:]:
+    for i, row in enumerate(rows):
+        # Skip header row if it contains keywords
+        if i == 0 and any(isinstance(x, str) and 'barcode' in x.lower() for x in row):
+            continue
+            
         try:
-            # Basic data extraction
-            raw_qty = str(row[idx_qty]) if idx_qty < len(row) else "0"
-            raw_brand = str(row[idx_brand]) if idx_brand < len(row) else ""
-            raw_desc = str(row[idx_desc]) if idx_desc < len(row) else ""
-            raw_type2 = str(row[idx_extra]) if idx_extra < len(row) and row[idx_extra] else ""
-            raw_ean = str(row[idx_ean]) if idx_ean < len(row) else ""
-            raw_price = str(row[idx_price]) if idx_price < len(row) else "0"
-
-            # Clean Name
-            full_name = f"{raw_brand} {raw_desc} {raw_type2}".strip()
+            # 1. Extract Quantity
+            raw_qty = str(row[idx_qty]) if row[idx_qty] is not None else "0"
+            qty = int(float(re.sub(r'[^\d.]', '', raw_qty)))
             
-            # --- Filters ---
-            # 1. Brand Filter
-            brand_upper = raw_brand.upper()
-            if any(fb in brand_upper for fb in forbidden_brands) or any(fb in full_name.upper() for fb in forbidden_brands):
-                continue
+            # 2. Extract Price
+            raw_price = str(row[idx_price]) if row[idx_price] is not None else "0"
+            price = float(re.sub(r'[^\d.]', '', raw_price.replace(',', '.')))
             
-            # 2. Appliance Filter
-            if appliance_regex.search(full_name):
-                continue
+            # 3. Extract EAN
+            raw_ean = str(row[idx_ean]) if row[idx_ean] is not None else ""
+            ean = re.sub(r'\D', '', raw_ean).zfill(13)
+            
+            # 4. Extract and Build Name
+            brand = str(row[idx_brand]).strip() if row[idx_brand] else ""
+            model_name = str(row[idx_name]).strip() if row[idx_name] else ""
+            full_name = f"{brand} {model_name}".strip()
+            name_lower = full_name.lower()
 
-            # 3. Refurbished / Scooter Filter
-            if refurb_regex.search(full_name) or scooter_regex.search(full_name):
+            # --- Filtering Rules ---
+            
+            # Quantity Filter
+            if qty <= 4:
                 continue
-
-            # 4. Quantity Cleaning & Filter
-            qty_clean = re.sub(r'[^\d]', '', raw_qty)
-            quantity = int(qty_clean) if qty_clean else 0
-            if quantity <= 4:
-                continue
-
-            # 5. Price Cleaning & Filter
-            price_clean = re.sub(r'[^\d.]', '', raw_price.replace(',', '.'))
-            price = float(price_clean) if price_clean else 0.0
+                
+            # Price Filter
             if price < 2.50:
                 continue
-            
-            # Total price calculation (Note: No 100 EUR filter for AKATRONIK per rules)
-            total_price = round(price * quantity, 2)
 
-            # 6. EAN Cleaning
-            ean_clean = re.sub(r'[^\d]', '', raw_ean)
-            if not ean_clean:
+            # AKATRONIK Brand Filter
+            if any(eb in name_lower for eb in excluded_brands):
                 continue
-            ean = ean_clean.zfill(13)
+            
+            # AKATRONIK Big Appliance Filter
+            if appliances_pattern.search(name_lower):
+                continue
+            
+            # Refurbished Filter
+            if any(term in name_lower for term in refurbished_terms):
+                continue
+            
+            # Scooter Filter
+            if re.search(r'scooter', name_lower, re.IGNORECASE):
+                continue
 
-            # Build final row
-            final_row = [
+            # Calculation
+            total_price = round(price * qty, 2)
+            
+            # Append valid row
+            processed_data.append([
                 ean,
                 full_name,
                 price,
-                quantity,
+                qty,
                 total_price,
                 "akatronik"
-            ]
-            processed_data.append(final_row)
+            ])
 
-        except (ValueError, IndexError):
+        except (ValueError, IndexError, TypeError):
             continue
 
     return processed_data

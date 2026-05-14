@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -44,92 +45,23 @@ BIG_APPLIANCE_KEYWORDS = [
 APPLE_IOS_DEVICE_REGEX = re.compile(r"\b(iphone|ipad)\b", re.IGNORECASE)
 
 
-STATIC_DIGITEC_ROWS = [
-	{
-		"Gtin": "8720389022166",
-		"ProviderKey": "P28398",
-		"ManufacturerKey": "",
-		"BrandName": "PHILIPS",
-		"ProductTitle": "PHILIPS HD9255/30",
-		"PurchasePriceExclVat": 79.00,
-		"Currency": "EURO",
-		"QuantityOnStock": 10,
-		"MinimumOrderQuantity": 10,
-		"Order Quantity Steps": 10,
-	},
-	{
-		"Gtin": "5999024868329",
-		"ProviderKey": "P17424",
-		"ManufacturerKey": "",
-		"BrandName": "Dometic",
-		"ProductTitle": "Dometic ACX3 40 G CombiCool tragbare Absorber-Kuhlbox",
-		"PurchasePriceExclVat": 250.00,
-		"Currency": "EURO",
-		"QuantityOnStock": 9,
-		"MinimumOrderQuantity": 4,
-		"Order Quantity Steps": 4,
-	},
-	{
-		"Gtin": "6934177746512",
-		"ProviderKey": "P7571",
-		"ManufacturerKey": "",
-		"BrandName": "Xiaomi",
-		"ProductTitle": "Xiaomi Auricolari Wireless Redmi Buds 3 Pro Glacier Gray",
-		"PurchasePriceExclVat": 10.00,
-		"Currency": "EURO",
-		"QuantityOnStock": 50,
-		"MinimumOrderQuantity": 30,
-		"Order Quantity Steps": 30,
-	},
-	{
-		"Gtin": "4001627025465",
-		"ProviderKey": "P2186",
-		"ManufacturerKey": "",
-		"BrandName": "GRAEF",
-		"ProductTitle": "GRAEF TB 501 STAND BLENDER",
-		"PurchasePriceExclVat": 31.00,
-		"Currency": "EURO",
-		"QuantityOnStock": 10,
-		"MinimumOrderQuantity": 10,
-		"Order Quantity Steps": 10,
-	},
-	{
-		"Gtin": "6925281982095",
-		"ProviderKey": "P2951",
-		"ManufacturerKey": "",
-		"BrandName": "JBL",
-		"ProductTitle": "JBL Charge 5 Blue",
-		"PurchasePriceExclVat": 63.00,
-		"Currency": "EURO",
-		"QuantityOnStock": 1,
-		"MinimumOrderQuantity": 1,
-		"Order Quantity Steps": 1,
-	},
-	{
-		"Gtin": "4054278497143",
-		"ProviderKey": "P2463",
-		"ManufacturerKey": "",
-		"BrandName": "Karcher",
-		"ProductTitle": "Karcher K7 Comact Home 1.447-053.0",
-		"PurchasePriceExclVat": 291.00,
-		"Currency": "EURO",
-		"QuantityOnStock": 10,
-		"MinimumOrderQuantity": 3,
-		"Order Quantity Steps": 3,
-	},
-	{
-		"Gtin": "0088381779210",
-		"ProviderKey": "P32862",
-		"ManufacturerKey": "",
-		"BrandName": "Makita",
-		"ProductTitle": "DTD173Z Akku-Schlagschrauber LXT",
-		"PurchasePriceExclVat": 128.00,
-		"Currency": "EURO",
-		"QuantityOnStock": 10,
-		"MinimumOrderQuantity": 6,
-		"Order Quantity Steps": 6,
-	},
-]
+def load_default_items() -> list[dict]:
+	"""Load default items from defaultitems.json."""
+	default_items_file = BASE_DIR / "defaultitems.json"
+	
+	if not default_items_file.exists():
+		print(f"Note: {default_items_file} not found. No default items will be loaded.")
+		return []
+	
+	try:
+		with default_items_file.open("r", encoding="utf-8") as f:
+			default_items = json.load(f)
+		
+		print(f"✓ Loaded {len(default_items)} default items from defaultitems.json")
+		return default_items
+	except Exception as e:
+		print(f"Warning: Could not load defaultitems.json: {e}")
+		return []
 
 
 def normalize_gtin(value: object) -> str:
@@ -488,16 +420,18 @@ def build_digitec_dataframe(final_df: pd.DataFrame) -> pd.DataFrame:
 	digitec_df["MinimumOrderQuantity"] = final_df["Min quantity"]
 	digitec_df["Order Quantity Steps"] = final_df["Min quantity"]
 
-	# Always append required static Digitec rows at the bottom.
-	static_df = pd.DataFrame(STATIC_DIGITEC_ROWS, columns=digitec_columns)
-	digitec_df = pd.concat([digitec_df, static_df], ignore_index=True)
-
 	return digitec_df
 
 
 def main() -> None:
 	output_df = pd.read_excel(OUTPUT_FILE, sheet_name="clean_output")
 	db_df = pd.read_excel(DATABASE_FILE, sheet_name="DataBase")
+	default_items = load_default_items()
+	default_item_eans = {
+		ean
+		for ean in (normalize_gtin(row.get("Gtin", "")) for row in default_items)
+		if ean
+	}
 
 	output_ean_col = pick_column(output_df, ["EAN", "barcode", "gtin"])
 	output_name_col = pick_column(output_df, ["Name", "ProductTitle", "title"])
@@ -516,6 +450,11 @@ def main() -> None:
 	output_df["_stock_value"] = output_df["_price_num"] * output_df["_qty_num"]
 	# Client rule: skip low total-value stock lines (< 100 EUR).
 	output_df = output_df[output_df["_stock_value"] >= 100].copy()
+	default_overlap_mask = output_df["_ean13"].isin(default_item_eans)
+	default_overlap_count = int(default_overlap_mask.sum())
+	if default_overlap_count:
+		print(f"✓ Removed {default_overlap_count} supplier rows that overlap with default EANs.")
+	output_df = output_df[~default_overlap_mask].copy()
 	output_df = apply_supplier_filters(output_df, output_vendor_col, output_name_col)
 	output_df = dedupe_by_ean_lowest_price(
 		output_df,
@@ -590,6 +529,22 @@ def main() -> None:
 			"price kole",
 		]
 	].copy()
+
+	# Add default items to final_df
+	for row in default_items:
+		default_row = {
+			"barcode": row.get("Gtin", ""),
+			"Hifi code": row.get("ProviderKey", ""),
+			"Name": row.get("BrandName", ""),
+			"ProductTitle": row.get("ProductTitle", ""),
+			"selling Price": row.get("PurchasePriceExclVat", ""),
+			"sum Available": row.get("QuantityOnStock", ""),
+			"Hifi price": row.get("PurchasePriceExclVat", ""),
+			"Vendor name": row.get("Vendor", "default"),
+			"Min quantity": row.get("MinimumOrderQuantity", ""),
+			"price kole": (float(row.get("PurchasePriceExclVat", 0)) * float(row.get("MinimumOrderQuantity", 0))),
+		}
+		final_df = pd.concat([final_df, pd.DataFrame([default_row])], ignore_index=True)
 
 	unmatched = merged[merged["_merge"] == "left_only"].copy()
 	new_products_df = unmatched[["barcode", "Hifi code", "Name", "ProductTitle"]].copy()
